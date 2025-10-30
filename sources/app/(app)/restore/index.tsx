@@ -157,9 +157,13 @@ export default function Restore() {
                     />
                 )}
                 <View style={{ flexGrow: 4, paddingTop: 30 }}>
-                    <RoundButton title="Restore with Secret Key Instead" display='inverted' onPress={() => {
-                        router.push('/restore/manual');
-                    }} />
+                    <RoundButton 
+                        title={t('connect.restoreWithSecretKey')} 
+                        display='inverted' 
+                        onPress={() => {
+                            router.push('/restore/manual');
+                        }} 
+                    />
                 </View>
             </View>
         </ScrollView>
