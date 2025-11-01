@@ -16,7 +16,12 @@
     "ota:production": "npx eas-cli@latest workflow:run ota.yaml",
     "typecheck": "tsc --noEmit",
     "postinstall": "patch-package",
-    "generate-theme": "tsx sources/theme.gen.ts"
+    "generate-theme": "tsx sources/theme.gen.ts",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "yarn expo export --platform web --output-dir dist && tauri build",
+    "desktop:build:windows": "yarn expo export --platform web --output-dir dist && tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+    "desktop:build:macos": "yarn expo export --platform web --output-dir dist && tauri build --target universal-apple-darwin",
+    "desktop:build:linux": "yarn expo export --platform web --output-dir dist && tauri build --target x86_64-unknown-linux-gnu"
   },
   "jest": {
     "preset": "jest-expo"
