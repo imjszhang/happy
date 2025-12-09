@@ -76,17 +76,6 @@ function NotAuthenticated() {
                     <View style={styles.buttonContainerSecondary}>
                         <RoundButton
                             size="normal"
-                            title={t('welcome.loginWithSecretKey')}
-                            onPress={() => {
-                                trackAccountRestored();
-                                router.push('/restore/manual');
-                            }}
-                            display="inverted"
-                        />
-                    </View>
-                    <View style={styles.buttonContainerSecondary}>
-                        <RoundButton
-                            size="normal"
                             title={t('welcome.createAccount')}
                             action={createAccount}
                             display="inverted"
@@ -143,17 +132,6 @@ function NotAuthenticated() {
                                         trackAccountRestored();
                                         router.push('/restore');
                                     }}
-                                />
-                            </View>
-                            <View style={styles.landscapeButtonContainerSecondary}>
-                                <RoundButton
-                                    size="normal"
-                                    title={t('welcome.loginWithSecretKey')}
-                                    onPress={() => {
-                                        trackAccountRestored();
-                                        router.push('/restore/manual');
-                                    }}
-                                    display="inverted"
                                 />
                             </View>
                             <View style={styles.landscapeButtonContainerSecondary}>
