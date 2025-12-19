@@ -1011,7 +1011,7 @@ async function startChatMode(rl) {
         const metadataData = decodeBase64(session.metadata, 'base64');
         metadata = encryption.decrypt(enc, metadataData);
     }
-    const projectName = metadata?.cwd?.split(/[/\\]/).pop() || '未知项目';
+    const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
     
     // 3. 显示最近消息
     await displayMessages(sessionId);
