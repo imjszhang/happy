@@ -13,7 +13,10 @@
  * 如果只提供 HAPPY_SECRET，脚本会自动从 Secret Key 恢复 Token
  * 
  * 可选参数:
- *   --server=URL  指定服务器地址 (默认: https://api.cluster-fluster.com)
+ *   --server=URL   指定服务器地址 (默认: https://api.cluster-fluster.com)
+ *   --mode=MODE    指定权限模式 (默认: default)
+ *                  Claude Code: default, acceptEdits, plan, bypassPermissions
+ *                  Codex: default, read-only, safe-yolo, yolo
  * 
  * .env 文件格式:
  *   HAPPY_SECRET=your_secret_key_here  # 只需要提供 Secret Key，Token 会自动恢复
@@ -21,6 +24,7 @@
  *   HAPPY_TOKEN=your_token_here
  *   HAPPY_SECRET=your_secret_here
  *   HAPPY_SERVER_URL=https://api.cluster-fluster.com  # 可选
+ *   HAPPY_MODE=yolo  # 可选，设置默认权限模式
  */
 
 const crypto = require('crypto');
@@ -114,6 +118,36 @@ const SECRET = args.secret || process.env.HAPPY_SECRET;
 const SERVER_URL = args.server || process.env.HAPPY_SERVER_URL || DEFAULT_SERVER_URL;
 const AUTO_DIAGNOSE = args.diagnose;  // --diagnose=sessionId
 const AUTO_TEST = args.test;  // --test=sessionId  (发送测试消息)
+
+// ============================================================================
+// 权限模式配置
+// ============================================================================
+
+// 有效的权限模式列表
+// Claude Code 模式: default, acceptEdits, plan, bypassPermissions
+// Codex 模式: default, read-only, safe-yolo, yolo
+const VALID_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'read-only', 'safe-yolo', 'yolo'];
+
+// 模式显示名称映射
+const MODE_DISPLAY_NAMES = {
+    'default': '默认',
+    'acceptEdits': '接受编辑',
+    'plan': '计划模式',
+    'bypassPermissions': '跳过权限',
+    'read-only': '只读',
+    'safe-yolo': 'Safe YOLO',
+    'yolo': 'YOLO'
+};
+
+// 当前权限模式（可通过命令行、环境变量或运行时切换）
+let currentPermissionMode = args.mode || process.env.HAPPY_MODE || 'default';
+
+// 验证模式是否有效
+if (!VALID_MODES.includes(currentPermissionMode)) {
+    console.error(`❌ 无效的模式: ${currentPermissionMode}`);
+    console.log(`有效模式: ${VALID_MODES.join(', ')}`);
+    process.exit(1);
+}
 
 // ============================================================================
 // Base64 编解码
@@ -738,7 +772,7 @@ async function connectWebSocket(token) {
     });
 }
 
-async function sendMessage(sessionId, encryptedMessage, localId) {
+async function sendMessage(sessionId, encryptedMessage, localId, permissionMode = 'default') {
     if (!socket) {
         console.error('WebSocket 未连接');
         return;
@@ -750,7 +784,7 @@ async function sendMessage(sessionId, encryptedMessage, localId) {
         message: encryptedMessage,
         localId: localId,
         sentFrom: 'mini-client',
-        permissionMode: 'default'
+        permissionMode: permissionMode
     });
 }
 
@@ -932,7 +966,7 @@ async function displayMessages(sessionId) {
     }
 }
 
-async function sendUserMessage(sessionId, text) {
+async function sendUserMessage(sessionId, text, permissionMode = null) {
     // 支持短 ID
     const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
     
@@ -947,7 +981,10 @@ async function sendUserMessage(sessionId, text) {
         return;
     }
     
-    // 构建消息内容
+    // 使用传入的模式，或使用当前全局模式
+    const mode = permissionMode || currentPermissionMode;
+    
+    // 构建消息内容（与项目源码一致）
     const content = {
         role: 'user',
         content: {
@@ -956,7 +993,7 @@ async function sendUserMessage(sessionId, text) {
         },
         meta: {
             sentFrom: 'mini-client',
-            permissionMode: 'default'
+            permissionMode: mode
         }
     };
     
@@ -967,10 +1004,11 @@ async function sendUserMessage(sessionId, text) {
     // 生成本地 ID
     const localId = crypto.randomUUID();
     
-    // 发送消息
-    await sendMessage(fullId, encryptedBase64, localId);
+    // 发送消息（同时在 WebSocket 层面也传递 permissionMode）
+    await sendMessage(fullId, encryptedBase64, localId, mode);
 
-    console.log(`✅ 消息已发送到会话 ${fullId.substring(0, 8)}...`);
+    const modeDisplay = MODE_DISPLAY_NAMES[mode] || mode;
+    console.log(`✅ 消息已发送到会话 ${fullId.substring(0, 8)}... [模式: ${modeDisplay}]`);
 }
 
 // ============================================================================
@@ -1017,9 +1055,11 @@ async function startChatMode(rl) {
     await displayMessages(sessionId);
     
     // 4. 进入对话循环
+    const modeDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
     console.log('─'.repeat(50));
     console.log(`💬 对话模式 - ${projectName}`);
-    console.log('   输入消息直接发送 | /refresh 刷新 | /exit 退出');
+    console.log(`   当前模式: ${modeDisplay}`);
+    console.log('   /mode [模式] 切换模式 | /refresh 刷新 | /exit 退出');
     console.log('─'.repeat(50));
     
     while (true) {
@@ -1036,8 +1076,55 @@ async function startChatMode(rl) {
             continue;
         }
         
+        // /mode 命令：显示或切换权限模式
+        if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
+            const parts = trimmed.split(' ');
+            if (parts.length === 1) {
+                // 显示当前模式和可用模式
+                const currentDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
+                console.log(`\n当前模式: ${currentPermissionMode} (${currentDisplay})`);
+                console.log('\n可用模式:');
+                console.log('  Claude Code: default, acceptEdits, plan, bypassPermissions');
+                console.log('  Codex:       default, read-only, safe-yolo, yolo');
+                console.log('\n使用 /mode <模式名> 切换，例如: /mode yolo');
+            } else {
+                const newMode = parts[1].toLowerCase();
+                // 支持一些常见的别名
+                const modeAliases = {
+                    'readonly': 'read-only',
+                    'safeyolo': 'safe-yolo',
+                    'bypass': 'bypassPermissions',
+                    'accept': 'acceptEdits',
+                    'edit': 'acceptEdits',
+                    'edits': 'acceptEdits'
+                };
+                const normalizedMode = modeAliases[newMode] || newMode;
+                
+                if (VALID_MODES.includes(normalizedMode)) {
+                    currentPermissionMode = normalizedMode;
+                    const display = MODE_DISPLAY_NAMES[normalizedMode] || normalizedMode;
+                    console.log(`✅ 模式已切换为: ${normalizedMode} (${display})`);
+                } else {
+                    console.log(`❌ 无效的模式: ${newMode}`);
+                    console.log(`有效模式: ${VALID_MODES.join(', ')}`);
+                }
+            }
+            continue;
+        }
+        
         if (trimmed === '/help' || trimmed === '/?') {
-            console.log('命令: /refresh 刷新消息 | /exit 退出对话');
+            console.log('\n命令:');
+            console.log('  /mode [模式]  - 显示或切换权限模式');
+            console.log('  /refresh      - 刷新消息列表');
+            console.log('  /exit         - 退出对话模式');
+            console.log('\n权限模式:');
+            console.log('  default          - 默认，会请求权限');
+            console.log('  acceptEdits      - 自动接受编辑');
+            console.log('  plan             - 计划模式');
+            console.log('  bypassPermissions- 跳过所有权限');
+            console.log('  read-only        - 只读模式 (Codex)');
+            console.log('  safe-yolo        - Safe YOLO (Codex)');
+            console.log('  yolo             - YOLO 模式 (Codex)');
             continue;
         }
         
@@ -1054,13 +1141,17 @@ async function startChatMode(rl) {
 }
 
 async function showMenu() {
+    const modeDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
     console.log('\n=== Happy Coder 最简客户端 ===');
+    console.log(`当前模式: ${currentPermissionMode} (${modeDisplay})`);
+    console.log('');
     console.log('[1] 查看会话列表');
     console.log('[2] 查看会话消息');
     console.log('[3] 发送消息');
     console.log('[4] 💬 进入对话模式');
     console.log('[5] 🔍 诊断会话状态');
-    console.log('[6] 退出');
+    console.log('[6] ⚙️  切换权限模式');
+    console.log('[7] 退出');
     console.log('');
 }
 
@@ -1153,6 +1244,7 @@ async function main() {
     }
 
     console.log(`🔗 服务器: ${SERVER_URL}`);
+    console.log(`⚙️  权限模式: ${currentPermissionMode} (${MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode})`);
     
     let token = TOKEN;
     let secret = SECRET;
@@ -1306,6 +1398,48 @@ async function main() {
                 break;
             
             case '6':
+                // 切换权限模式
+                console.log('\n可用的权限模式:');
+                VALID_MODES.forEach((mode, index) => {
+                    const display = MODE_DISPLAY_NAMES[mode] || mode;
+                    const marker = mode === currentPermissionMode ? ' ✓' : '';
+                    console.log(`  [${index + 1}] ${mode} (${display})${marker}`);
+                });
+                console.log('');
+                const modeChoice = await question('选择模式编号 (或直接输入模式名): ');
+                const trimmedChoice = modeChoice.trim().toLowerCase();
+                
+                if (trimmedChoice) {
+                    // 支持编号选择
+                    const modeIndex = parseInt(trimmedChoice) - 1;
+                    let newMode = null;
+                    
+                    if (!isNaN(modeIndex) && modeIndex >= 0 && modeIndex < VALID_MODES.length) {
+                        newMode = VALID_MODES[modeIndex];
+                    } else {
+                        // 支持名称输入和别名
+                        const modeAliases = {
+                            'readonly': 'read-only',
+                            'safeyolo': 'safe-yolo',
+                            'bypass': 'bypassPermissions',
+                            'accept': 'acceptEdits',
+                            'edit': 'acceptEdits',
+                            'edits': 'acceptEdits'
+                        };
+                        newMode = modeAliases[trimmedChoice] || trimmedChoice;
+                    }
+                    
+                    if (VALID_MODES.includes(newMode)) {
+                        currentPermissionMode = newMode;
+                        const display = MODE_DISPLAY_NAMES[newMode] || newMode;
+                        console.log(`✅ 模式已切换为: ${newMode} (${display})`);
+                    } else {
+                        console.log(`❌ 无效的模式: ${trimmedChoice}`);
+                    }
+                }
+                break;
+            
+            case '7':
             case 'q':
             case 'quit':
             case 'exit':
