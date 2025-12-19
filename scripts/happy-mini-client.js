@@ -112,6 +112,8 @@ const args = parseArgs();
 const TOKEN = args.token || process.env.HAPPY_TOKEN;
 const SECRET = args.secret || process.env.HAPPY_SECRET;
 const SERVER_URL = args.server || process.env.HAPPY_SERVER_URL || DEFAULT_SERVER_URL;
+const AUTO_DIAGNOSE = args.diagnose;  // --diagnose=sessionId
+const AUTO_TEST = args.test;  // --test=sessionId  (发送测试消息)
 
 // ============================================================================
 // Base64 编解码
@@ -341,8 +343,8 @@ function encryptAESGCM(data, keyBuffer) {
     const encrypted = Buffer.concat([cipher.update(jsonStr, 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
     
-    // 格式: iv (12) + authTag (16) + encrypted
-    const result = Buffer.concat([iv, authTag, encrypted]);
+    // rn-encryption 格式: iv (12) + ciphertext + authTag (16)
+    const result = Buffer.concat([iv, encrypted, authTag]);
     
     // 添加版本字节
     const output = new Uint8Array(result.length + 1);
@@ -356,9 +358,11 @@ function decryptAESGCM(data, keyBuffer) {
         if (data[0] !== 0) return null;
         
         const payload = data.slice(1);
+        
+        // rn-encryption 格式: iv (12) + ciphertext + authTag (16)
         const iv = payload.slice(0, 12);
-        const authTag = payload.slice(12, 28);
-        const encrypted = payload.slice(28);
+        const authTag = payload.slice(payload.length - 16);  // 最后 16 字节是 authTag
+        const encrypted = payload.slice(12, payload.length - 16);  // 中间是密文
         
         const decipher = crypto.createDecipheriv('aes-256-gcm', keyBuffer, iv);
         decipher.setAuthTag(authTag);
@@ -532,6 +536,156 @@ let CURRENT_TOKEN = null;
 // ============================================================================
 
 let socket = null;
+let currentChatSessionId = null;  // 当前对话会话ID
+let chatModeRl = null;  // 对话模式的 readline 接口
+
+// ============================================================================
+// 消息文本提取工具函数
+// ============================================================================
+
+function extractMessageText(decrypted) {
+    // 处理用户消息 (role: 'user')
+    if (decrypted.role === 'user') {
+        if (typeof decrypted.content === 'string') return decrypted.content;
+        if (decrypted.content?.text) return decrypted.content.text;
+        if (decrypted.content?.type === 'text') return decrypted.content.text;
+        return JSON.stringify(decrypted.content).substring(0, 200);
+    }
+    
+    // 处理 agent 消息 (role: 'agent')
+    if (decrypted.role === 'agent') {
+        const content = decrypted.content;
+        
+        // 处理 codex 格式
+        if (content?.type === 'codex') {
+            if (content.data?.type === 'message' || content.data?.type === 'reasoning') {
+                return content.data.message;
+            }
+            if (content.data?.type === 'tool-call') {
+                return `[工具调用: ${content.data.name || 'unknown'}]`;
+            }
+            if (content.data?.type === 'tool-call-result') {
+                return `[工具结果]`;
+            }
+        }
+        
+        // 处理 output 格式
+        if (content?.type === 'output') {
+            const data = content.data;
+            
+            // assistant 消息
+            if (data?.type === 'assistant' && data.message?.content) {
+                const parts = data.message.content.map(part => {
+                    if (part.type === 'text') return part.text;
+                    if (part.type === 'tool_use') return `[工具调用: ${part.name}]`;
+                    if (part.type === 'tool_result') return `[工具结果]`;
+                    return null;
+                }).filter(Boolean);
+                return parts.join('\n') || '[助手消息]';
+            }
+            
+            // user/tool result 消息
+            if (data?.type === 'user' && data.message?.content) {
+                if (typeof data.message.content === 'string') {
+                    return data.message.content;
+                }
+                if (Array.isArray(data.message.content)) {
+                    const parts = data.message.content.map(part => {
+                        if (part.type === 'text') return part.text;
+                        if (part.type === 'tool_result') return `[工具结果]`;
+                        return null;
+                    }).filter(Boolean);
+                    return parts.join('\n') || '[工具结果]';
+                }
+            }
+            
+            // summary 消息
+            if (data?.type === 'summary') {
+                return data.summary;
+            }
+        }
+        
+        // 处理 event 格式
+        if (content?.type === 'event') {
+            const event = content.data;
+            if (event?.type === 'switch') {
+                return `[模式切换: ${event.mode}]`;
+            }
+            if (event?.type === 'message') {
+                return event.message;
+            }
+            if (event?.type === 'ready') {
+                return '[Agent 就绪]';
+            }
+            return `[事件: ${event?.type || 'unknown'}]`;
+        }
+    }
+    
+    // 兼容旧格式
+    if (typeof decrypted.content === 'string') return decrypted.content;
+    if (decrypted.content?.text) return decrypted.content.text;
+    if (decrypted.content?.type === 'text') return decrypted.content.text;
+    if (Array.isArray(decrypted.content)) {
+        const parts = decrypted.content.map(part => {
+            if (part.type === 'text') return part.text;
+            if (part.type === 'tool_use') return `[工具调用: ${part.name}]`;
+            if (part.type === 'tool_result') return `[工具结果]`;
+            return `[${part.type}]`;
+        }).filter(Boolean);
+        return parts.join('\n') || '[复杂内容]';
+    }
+    return JSON.stringify(decrypted.content).substring(0, 200);
+}
+
+// 处理对话模式下收到的 WebSocket 更新
+function handleChatModeUpdate(data) {
+    try {
+        // 数据结构: { id, seq, body: { t: 'new-message', sid, message }, createdAt }
+        const body = data.body;
+        if (!body || body.t !== 'new-message') return;
+        
+        const message = body.message;
+        if (!message || message.content?.t !== 'encrypted') return;
+        
+        const enc = encryption.getSessionEncryption(currentChatSessionId);
+        if (!enc) return;
+        
+        const encryptedData = decodeBase64(message.content.c, 'base64');
+        const decrypted = encryption.decrypt(enc, encryptedData);
+        
+        if (decrypted) {
+            const role = decrypted.role || 'unknown';
+            
+            // 只显示 agent 的回复（用户消息是自己发的，不需要显示）
+            // 注意：源码中 agent 消息的 role 是 'agent'，不是 'assistant'
+            if (role === 'agent') {
+                // 跳过 meta 消息和 sidechain 消息
+                const content = decrypted.content;
+                if (content?.type === 'output' && (content.data?.isMeta || content.data?.isSidechain)) {
+                    return;
+                }
+                
+                const text = extractMessageText(decrypted);
+                if (!text || text.startsWith('[事件:') || text === '[Agent 就绪]') {
+                    return; // 跳过事件类消息
+                }
+                
+                const time = new Date().toLocaleTimeString();
+                
+                // 清除当前行并显示消息
+                process.stdout.write('\r' + ' '.repeat(50) + '\r');
+                console.log(`\n🤖 [${time}] ${text}`);
+                
+                // 恢复提示符
+                if (chatModeRl) {
+                    process.stdout.write('> ');
+                }
+            }
+        }
+    } catch (error) {
+        // 静默处理解密错误
+    }
+}
 
 async function connectWebSocket(token) {
     const { io } = require('socket.io-client');
@@ -565,21 +719,32 @@ async function connectWebSocket(token) {
         });
 
         socket.on('update', (data) => {
-            console.log('\n📨 收到更新:', JSON.stringify(data).substring(0, 200));
+            // 数据结构: { id, seq, body: { t, sid, ... }, createdAt }
+            const sessionId = data.body?.sid || data.body?.id;
+            
+            // 如果在对话模式中，处理当前会话的消息
+            if (currentChatSessionId && sessionId === currentChatSessionId) {
+                handleChatModeUpdate(data);
+            }
         });
 
         socket.on('ephemeral', (data) => {
-            // 静默处理 ephemeral 更新
+            // 静默处理 ephemeral 更新 (心跳等)
+            // 如果需要调试，取消下面的注释
+            // if (data.type === 'activity') {
+            //     console.log(`[ephemeral] thinking=${data.thinking}, active=${data.active}`);
+            // }
         });
     });
 }
 
-function sendMessage(sessionId, encryptedMessage, localId) {
+async function sendMessage(sessionId, encryptedMessage, localId) {
     if (!socket) {
         console.error('WebSocket 未连接');
         return;
     }
     
+    // 直接发送消息（与源码一致，使用 emit 而不是 emitWithAck）
     socket.emit('message', {
         sid: sessionId,
         message: encryptedMessage,
@@ -629,7 +794,7 @@ async function displaySessions() {
                 metadata = encryption.decrypt(enc, metadataData);
             }
             
-            const projectName = metadata?.cwd?.split(/[/\\]/).pop() || '未知项目';
+            const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
             const status = session.active ? '🟢 在线' : '⚪ 离线';
             const date = new Date(session.updatedAt).toLocaleString();
             
@@ -639,6 +804,67 @@ async function displaySessions() {
         }
     } catch (error) {
         console.error('获取会话失败:', error.message);
+    }
+}
+
+// 显示带编号的会话列表，返回编号到会话ID的映射
+async function displaySessionsWithIndex() {
+    console.log('\n📋 获取会话列表...');
+    
+    try {
+        const data = await fetchSessions(CURRENT_TOKEN);
+        sessions = {};
+        const indexMap = {};  // { '1': 'full-session-id', ... }
+        
+        if (!data.sessions || data.sessions.length === 0) {
+            console.log('(暂无会话)');
+            return indexMap;
+        }
+        
+        // 按活动状态和更新时间排序（活动的在前，最近更新的在前）
+        const sorted = [...data.sessions].sort((a, b) => {
+            if (a.active !== b.active) return b.active - a.active;
+            return new Date(b.updatedAt) - new Date(a.updatedAt);
+        });
+        
+        console.log('\n=== 选择会话 ===\n');
+        
+        for (let i = 0; i < sorted.length; i++) {
+            const session = sorted[i];
+            sessions[session.id] = session;
+            
+            // 初始化会话加密
+            if (session.dataEncryptionKey) {
+                const decryptedKey = await encryption.decryptEncryptionKey(session.dataEncryptionKey);
+                await encryption.initializeSession(session.id, decryptedKey);
+            } else {
+                await encryption.initializeSession(session.id, null);
+            }
+            
+            // 解密元数据
+            let metadata = null;
+            if (session.metadata) {
+                const enc = encryption.getSessionEncryption(session.id);
+                const metadataData = decodeBase64(session.metadata, 'base64');
+                metadata = encryption.decrypt(enc, metadataData);
+            }
+            
+            const idx = i + 1;
+            indexMap[idx] = session.id;
+            
+            const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
+            const status = session.active ? '🟢' : '⚪';
+            const date = new Date(session.updatedAt).toLocaleString();
+            
+            console.log(`[${idx}] ${status} ${projectName}`);
+            console.log(`    ID: ${session.id.substring(0, 8)}... | 更新: ${date}`);
+        }
+        
+        console.log('');
+        return indexMap;
+    } catch (error) {
+        console.error('获取会话失败:', error.message);
+        return {};
     }
 }
 
@@ -674,23 +900,22 @@ async function displayMessages(sessionId) {
                 
                 if (decrypted) {
                     const role = decrypted.role || 'unknown';
-                    const roleIcon = role === 'user' ? '👤' : role === 'assistant' ? '🤖' : '📝';
+                    
+                    // 跳过 event 类型消息和 meta/sidechain 消息
+                    if (role === 'agent') {
+                        const content = decrypted.content;
+                        if (content?.type === 'event') continue;
+                        if (content?.type === 'output' && (content.data?.isMeta || content.data?.isSidechain || content.data?.isCompactSummary)) {
+                            continue;
+                        }
+                    }
+                    
+                    // 角色图标：user -> 👤, agent -> 🤖
+                    const roleIcon = role === 'user' ? '👤' : role === 'agent' ? '🤖' : '📝';
                     const date = new Date(msg.createdAt).toLocaleTimeString();
                     
-                    // 提取文本内容
-                    let text = '';
-                    if (typeof decrypted.content === 'string') {
-                        text = decrypted.content;
-                    } else if (decrypted.content?.text) {
-                        text = decrypted.content.text;
-                    } else if (decrypted.content?.type === 'text') {
-                        text = decrypted.content.text;
-                    } else if (Array.isArray(decrypted.content)) {
-                        const textContent = decrypted.content.find(c => c.type === 'text');
-                        text = textContent?.text || JSON.stringify(decrypted.content).substring(0, 100);
-                    } else {
-                        text = JSON.stringify(decrypted.content).substring(0, 100);
-                    }
+                    // 使用统一的文本提取函数
+                    let text = extractMessageText(decrypted);
                     
                     // 截断过长的文本
                     if (text.length > 200) {
@@ -743,9 +968,89 @@ async function sendUserMessage(sessionId, text) {
     const localId = crypto.randomUUID();
     
     // 发送消息
-    sendMessage(fullId, encryptedBase64, localId);
-    
+    await sendMessage(fullId, encryptedBase64, localId);
+
     console.log(`✅ 消息已发送到会话 ${fullId.substring(0, 8)}...`);
+}
+
+// ============================================================================
+// 对话模式
+// ============================================================================
+
+async function startChatMode(rl) {
+    // 1. 显示会话列表（带编号）
+    const indexMap = await displaySessionsWithIndex();
+    
+    if (Object.keys(indexMap).length === 0) {
+        console.log('没有可用的会话');
+        return;
+    }
+    
+    // 2. 等待用户选择
+    const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
+    const choice = await question('输入编号选择会话 (或输入 q 返回): ');
+    
+    if (choice.toLowerCase() === 'q' || choice.trim() === '') {
+        return;
+    }
+    
+    const sessionId = indexMap[parseInt(choice)];
+    if (!sessionId) {
+        console.log('❌ 无效的编号');
+        return;
+    }
+    
+    currentChatSessionId = sessionId;
+    chatModeRl = rl;
+    
+    // 获取会话信息用于显示
+    const session = sessions[sessionId];
+    let metadata = null;
+    if (session?.metadata) {
+        const enc = encryption.getSessionEncryption(sessionId);
+        const metadataData = decodeBase64(session.metadata, 'base64');
+        metadata = encryption.decrypt(enc, metadataData);
+    }
+    const projectName = metadata?.cwd?.split(/[/\\]/).pop() || '未知项目';
+    
+    // 3. 显示最近消息
+    await displayMessages(sessionId);
+    
+    // 4. 进入对话循环
+    console.log('─'.repeat(50));
+    console.log(`💬 对话模式 - ${projectName}`);
+    console.log('   输入消息直接发送 | /refresh 刷新 | /exit 退出');
+    console.log('─'.repeat(50));
+    
+    while (true) {
+        const input = await question('> ');
+        const trimmed = input.trim();
+        
+        if (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q') {
+            console.log('👋 退出对话模式');
+            break;
+        }
+        
+        if (trimmed === '/refresh' || trimmed === '/r') {
+            await displayMessages(sessionId);
+            continue;
+        }
+        
+        if (trimmed === '/help' || trimmed === '/?') {
+            console.log('命令: /refresh 刷新消息 | /exit 退出对话');
+            continue;
+        }
+        
+        if (trimmed === '') {
+            continue;
+        }
+        
+        // 发送消息
+        await sendUserMessage(sessionId, trimmed);
+    }
+    
+    currentChatSessionId = null;
+    chatModeRl = null;
 }
 
 async function showMenu() {
@@ -753,7 +1058,80 @@ async function showMenu() {
     console.log('[1] 查看会话列表');
     console.log('[2] 查看会话消息');
     console.log('[3] 发送消息');
-    console.log('[4] 退出');
+    console.log('[4] 💬 进入对话模式');
+    console.log('[5] 🔍 诊断会话状态');
+    console.log('[6] 退出');
+    console.log('');
+}
+
+// 诊断会话状态
+async function diagnoseSession(sessionId) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    
+    if (!sessions[fullId]) {
+        console.log('❌ 会话不存在，请先获取会话列表');
+        return;
+    }
+    
+    const session = sessions[fullId];
+    
+    console.log('\n=== 会话诊断信息 ===\n');
+    console.log(`会话 ID: ${fullId}`);
+    console.log(`状态: ${session.active ? '🟢 在线' : '⚪ 离线'}`);
+    console.log(`最后活跃: ${new Date(session.activeAt).toLocaleString()}`);
+    console.log(`更新时间: ${new Date(session.updatedAt).toLocaleString()}`);
+    
+    // 解密并显示 agentState
+    const enc = encryption.getSessionEncryption(fullId);
+    console.log(`\n加密类型: ${enc ? enc.type : '未初始化'}`);
+    console.log(`数据加密密钥: ${session.dataEncryptionKey ? '✓ 有' : '✗ 无'}`);
+    console.log(`agentState: ${session.agentState ? '✓ 有' : '✗ 无'}`);
+    console.log(`metadata: ${session.metadata ? '✓ 有' : '✗ 无'}`);
+    
+    if (enc && session.agentState) {
+        try {
+            const agentStateData = decodeBase64(session.agentState, 'base64');
+            const agentState = encryption.decrypt(enc, agentStateData);
+            console.log('\n--- Agent 状态 ---');
+            console.log(`controlledByUser: ${agentState?.controlledByUser ?? 'undefined'}`);
+            console.log(`mode: ${agentState?.mode ?? 'undefined'}`);
+            console.log(`pending requests: ${Object.keys(agentState?.requests || {}).length}`);
+            if (agentState?.error) {
+                console.log(`错误: ${agentState.error}`);
+            }
+            console.log('\n完整 agentState:');
+            console.log(JSON.stringify(agentState, null, 2).substring(0, 1000));
+        } catch (error) {
+            console.log('无法解密 agentState:', error.message);
+        }
+    } else {
+        console.log('\n--- Agent 状态 ---');
+        console.log(`enc=${!!enc}, session.agentState=${!!session.agentState}`);
+        console.log('无 agentState 数据或加密器未初始化');
+    }
+    
+    // 解密并显示 metadata
+    if (enc && session.metadata) {
+        try {
+            const metadataData = decodeBase64(session.metadata, 'base64');
+            const metadata = encryption.decrypt(enc, metadataData);
+            console.log('\n--- 元数据 ---');
+            if (metadata) {
+                console.log(`工作目录: ${metadata.path ?? metadata.cwd ?? 'unknown'}`);
+                console.log(`平台: ${metadata.os ?? metadata.platform ?? 'unknown'}`);
+                console.log(`主机名: ${metadata.host ?? metadata.hostname ?? 'unknown'}`);
+                console.log(`版本: ${metadata.version ?? 'unknown'}`);
+            } else {
+                console.log('解密返回 null');
+            }
+        } catch (error) {
+            console.log('无法解密 metadata:', error.message);
+        }
+    } else {
+        console.log('\n--- 元数据 ---');
+        console.log(`enc=${!!enc}, session.metadata=${!!session.metadata}`);
+    }
+    
     console.log('');
 }
 
@@ -848,6 +1226,47 @@ async function main() {
 
     const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
 
+    // 自动诊断模式
+    if (AUTO_DIAGNOSE) {
+        console.log(`\n🔍 自动诊断模式: ${AUTO_DIAGNOSE}`);
+        // 先获取会话列表
+        await displaySessions();
+        // 然后诊断指定会话
+        await diagnoseSession(AUTO_DIAGNOSE);
+        rl.close();
+        if (socket) socket.close();
+        process.exit(0);
+    }
+    
+    // 自动测试模式
+    if (AUTO_TEST) {
+        console.log(`\n🧪 自动测试模式: ${AUTO_TEST}`);
+        // 先获取会话列表
+        await displaySessions();
+        
+        // 设置当前会话以接收实时更新
+        const fullId = Object.keys(sessions).find(id => id.startsWith(AUTO_TEST)) || AUTO_TEST;
+        currentChatSessionId = fullId;
+        chatModeRl = rl;
+        
+        // 发送测试消息
+        const testMessage = '你好，这是来自 mini-client 的测试消息，请简短回复';
+        console.log(`\n📤 发送测试消息: "${testMessage}"`);
+        await sendUserMessage(AUTO_TEST, testMessage);
+        
+        // 等待 15 秒看看有没有回复
+        console.log('\n⏳ 等待 15 秒接收回复...');
+        await new Promise(resolve => setTimeout(resolve, 15000));
+        
+        // 获取并显示最新消息
+        console.log('\n📥 获取最新消息:');
+        await displayMessages(AUTO_TEST);
+        
+        rl.close();
+        if (socket) socket.close();
+        process.exit(0);
+    }
+
     // 主循环
     while (true) {
         await showMenu();
@@ -876,6 +1295,17 @@ async function main() {
                 break;
             
             case '4':
+                await startChatMode(rl);
+                break;
+            
+            case '5':
+                const sessionIdForDiag = await question('请输入会话 ID (可以只输入前几位): ');
+                if (sessionIdForDiag.trim()) {
+                    await diagnoseSession(sessionIdForDiag.trim());
+                }
+                break;
+            
+            case '6':
             case 'q':
             case 'quit':
             case 'exit':
@@ -884,7 +1314,7 @@ async function main() {
                 if (socket) socket.close();
                 process.exit(0);
                 break;
-            
+
             default:
                 console.log('❓ 无效选择，请重试');
         }
