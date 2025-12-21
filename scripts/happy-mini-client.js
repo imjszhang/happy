@@ -1,30 +1,86 @@
 /**
- * Happy Coder - 最简客户端
+ * HappyMiniClient - Happy Coder 完整命令行客户端
  * 
- * 一个独立的 Node.js 脚本，用于与 happy-server 交互。
- * 支持查看会话列表、查看消息、发送消息等基础功能。
+ * > 创建时间: 2025-12-20
+ * > 最后更新: 2025-12-21
+ * > 当前版本: 2.0.0
  * 
- * 使用方式:
- *   node scripts/mini-client.js --token=YOUR_TOKEN --secret=YOUR_SECRET
+ * 功能简介：
+ * ==========
+ * HappyMiniClient 是一个独立的 Node.js 脚本，用于与 happy-server 交互。
+ * 支持完整的账户管理、会话操作、数据同步等功能。
  * 
- * 或通过环境变量 (支持从根目录 .env 文件读取):
- *   HAPPY_TOKEN=xxx HAPPY_SECRET=xxx node scripts/mini-client.js
+ * 支持的功能：
+ * -----------
+ * - 会话管理 - 查看会话列表、消息、发送消息、删除会话
+ * - 账户管理 - 查看/修改资料和设置
+ * - 机器管理 - 查看 CLI 实例列表和状态
+ * - 使用量统计 - 查询 Token 使用量和费用
+ * - Artifacts - 创建、查看、更新、删除制品
+ * - KV 存储 - 键值对存储操作
+ * - 社交功能 - 好友列表、用户搜索、动态 Feed
+ * - 服务连接 - 管理第三方服务连接状态
  * 
- * 如果只提供 HAPPY_SECRET，脚本会自动从 Secret Key 恢复 Token
+ * 主要功能：
+ * ---------
+ * 1. 从 Secret Key 自动恢复 Token 认证
+ * 2. 端到端加密的数据读写
+ * 3. WebSocket 实时消息同步
+ * 4. 命令行模式快速操作
+ * 5. 交互式菜单导航
  * 
- * 可选参数:
- *   --server=URL   指定服务器地址 (默认: https://api.cluster-fluster.com)
- *   --mode=MODE    指定权限模式 (默认: default)
- *                  Claude Code: default, acceptEdits, plan, bypassPermissions
- *                  Codex: default, read-only, safe-yolo, yolo
+ * 使用方法：
+ * ---------
+ * ```bash
+ * # 基本使用
+ * node scripts/happy-mini-client.js --secret=YOUR_SECRET
  * 
- * .env 文件格式:
- *   HAPPY_SECRET=your_secret_key_here  # 只需要提供 Secret Key，Token 会自动恢复
- *   # 或者同时提供:
- *   HAPPY_TOKEN=your_token_here
- *   HAPPY_SECRET=your_secret_here
- *   HAPPY_SERVER_URL=https://api.cluster-fluster.com  # 可选
- *   HAPPY_MODE=yolo  # 可选，设置默认权限模式
+ * # 指定服务器和模式
+ * node scripts/happy-mini-client.js --secret=xxx --server=URL --mode=yolo
+ * 
+ * # 交互式命令
+ * > profile          # 查看账户资料
+ * > settings         # 查看账户设置
+ * > machines         # 查看机器列表
+ * > usage            # 查看使用量统计
+ * > help             # 显示帮助
+ * ```
+ * 
+ * 返回数据格式：
+ * -------------
+ * 所有加密数据使用 AES-256-GCM 或 libsodium SecretBox 解密
+ * - 会话数据：metadata, agentState (加密)
+ * - 消息内容：role, content (加密)
+ * - 设置数据：key-value pairs (加密)
+ * 
+ * CHANGELOG：
+ * ==========
+ * 
+ * ## [2.0.0] - 2025-12-21
+ * 
+ * ### 新增
+ * - ✨ 账户资料查看功能
+ * - ✨ 账户设置查看/修改功能
+ * - ✨ 机器列表查看功能
+ * - ✨ 使用量统计查询功能
+ * - ✨ Artifacts 完整 CRUD 功能
+ * - ✨ KV 存储操作功能
+ * - ✨ 好友列表和用户搜索功能
+ * - ✨ 动态 Feed 查看功能
+ * - ✨ 会话删除功能
+ * - ✨ 服务连接管理功能
+ * - ✨ 命令行模式交互
+ * 
+ * ## [1.0.0] - 2025-12-20
+ * 
+ * ### 新增
+ * - ✨ 初始版本：会话列表、消息查看、发送消息
+ * 
+ * 版本说明：
+ * ---------
+ * - **主版本号** (x.0.0): 不兼容的 API 变更
+ * - **次版本号** (0.x.0): 新增功能，向后兼容
+ * - **修订号** (0.0.x): 问题修复和小改进
  */
 
 const crypto = require('crypto');
@@ -349,6 +405,20 @@ function decryptSecretBox(data, secret) {
 }
 
 // Box 加密 (公钥加密)
+function encryptBox(data, recipientPublicKey, senderSecretKey) {
+    const nonce = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+    const message = Buffer.from(JSON.stringify(data), 'utf8');
+    const encrypted = sodium.crypto_box_easy(message, nonce, recipientPublicKey, senderSecretKey);
+    
+    // 格式: ephemeralPublicKey + nonce + encrypted
+    const ephemeralKeypair = sodium.crypto_box_keypair();
+    const result = new Uint8Array(sodium.crypto_box_PUBLICKEYBYTES + nonce.length + encrypted.length);
+    result.set(ephemeralKeypair.publicKey);
+    result.set(nonce, sodium.crypto_box_PUBLICKEYBYTES);
+    result.set(encrypted, sodium.crypto_box_PUBLICKEYBYTES + nonce.length);
+    return result;
+}
+
 function decryptBox(encryptedBundle, recipientSecretKey) {
     const publicKeyBytes = sodium.crypto_box_PUBLICKEYBYTES;
     const nonceBytes = sodium.crypto_box_NONCEBYTES;
@@ -417,6 +487,8 @@ class Encryption {
         this.masterSecret = masterSecret;
         this.contentKeyPair = contentKeyPair;
         this.sessionEncryptions = new Map();
+        this.machineEncryptions = new Map();
+        this.artifactEncryptions = new Map();
     }
 
     static async create(masterSecret) {
@@ -449,9 +521,37 @@ class Encryption {
         this.sessionEncryptions.set(sessionId, encryptor);
     }
 
+    // 初始化机器加密
+    async initializeMachine(machineId, dataEncryptionKey) {
+        const encryptor = dataEncryptionKey 
+            ? { type: 'aes', key: dataEncryptionKey }
+            : { type: 'secretbox', key: this.masterSecret };
+        
+        this.machineEncryptions.set(machineId, encryptor);
+    }
+
+    // 初始化 Artifact 加密
+    async initializeArtifact(artifactId, dataEncryptionKey) {
+        const encryptor = dataEncryptionKey 
+            ? { type: 'aes', key: dataEncryptionKey }
+            : { type: 'secretbox', key: this.masterSecret };
+        
+        this.artifactEncryptions.set(artifactId, encryptor);
+    }
+
     // 获取会话加密器
     getSessionEncryption(sessionId) {
         return this.sessionEncryptions.get(sessionId);
+    }
+
+    // 获取机器加密器
+    getMachineEncryption(machineId) {
+        return this.machineEncryptions.get(machineId);
+    }
+
+    // 获取 Artifact 加密器
+    getArtifactEncryption(artifactId) {
+        return this.artifactEncryptions.get(artifactId);
     }
 
     // 加密数据
@@ -476,6 +576,12 @@ class Encryption {
     decryptLegacy(encrypted) {
         const encryptedData = decodeBase64(encrypted, 'base64');
         return decryptSecretBox(encryptedData, this.masterSecret);
+    }
+
+    // 使用旧版加密加密
+    encryptLegacy(data) {
+        const encrypted = encryptSecretBox(data, this.masterSecret);
+        return encodeBase64(encrypted, 'base64');
     }
 }
 
@@ -529,7 +635,7 @@ async function authGetToken(secret, serverUrl) {
 }
 
 // ============================================================================
-// HTTP API
+// HTTP API - 基础
 // ============================================================================
 
 async function fetchSessions(token) {
@@ -560,6 +666,397 @@ async function fetchMessages(token, sessionId) {
     }
     
     return response.json();
+}
+
+// ============================================================================
+// HTTP API - 账户资料
+// ============================================================================
+
+async function fetchProfile(token) {
+    const response = await fetch(`${SERVER_URL}/v1/account/profile`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取账户资料失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 账户设置
+// ============================================================================
+
+async function fetchSettings(token) {
+    const response = await fetch(`${SERVER_URL}/v1/account/settings`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取账户设置失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function updateSettings(token, settings, version) {
+    const response = await fetch(`${SERVER_URL}/v1/account/settings`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            settings: settings,
+            version: version
+        })
+    });
+    
+    if (!response.ok) {
+        throw new Error(`更新账户设置失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 机器列表
+// ============================================================================
+
+async function fetchMachines(token) {
+    const response = await fetch(`${SERVER_URL}/v1/machines`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取机器列表失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 使用量统计
+// ============================================================================
+
+async function queryUsage(token, params = {}) {
+    const response = await fetch(`${SERVER_URL}/v1/usage/query`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(params)
+    });
+    
+    if (!response.ok) {
+        throw new Error(`查询使用量失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - Artifacts
+// ============================================================================
+
+async function fetchArtifacts(token) {
+    const response = await fetch(`${SERVER_URL}/v1/artifacts`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取 Artifacts 失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function fetchArtifact(token, artifactId) {
+    const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Artifact 不存在');
+        }
+        throw new Error(`获取 Artifact 失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function createArtifact(token, data) {
+    const response = await fetch(`${SERVER_URL}/v1/artifacts`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    });
+    
+    if (!response.ok) {
+        throw new Error(`创建 Artifact 失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function updateArtifact(token, artifactId, data) {
+    const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    });
+    
+    if (!response.ok) {
+        throw new Error(`更新 Artifact 失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function deleteArtifact(token, artifactId) {
+    const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
+        method: 'DELETE',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`删除 Artifact 失败: ${response.status}`);
+    }
+}
+
+// ============================================================================
+// HTTP API - KV 存储
+// ============================================================================
+
+async function kvList(token, params = {}) {
+    const queryParams = new URLSearchParams();
+    if (params.prefix) queryParams.append('prefix', params.prefix);
+    if (params.limit) queryParams.append('limit', params.limit.toString());
+    
+    const url = queryParams.toString()
+        ? `${SERVER_URL}/v1/kv?${queryParams.toString()}`
+        : `${SERVER_URL}/v1/kv`;
+    
+    const response = await fetch(url, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取 KV 列表失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function kvGet(token, key) {
+    const response = await fetch(`${SERVER_URL}/v1/kv/${encodeURIComponent(key)}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (response.status === 404) {
+        return null;
+    }
+    
+    if (!response.ok) {
+        throw new Error(`获取 KV 值失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function kvMutate(token, mutations) {
+    const response = await fetch(`${SERVER_URL}/v1/kv`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ mutations })
+    });
+    
+    if (!response.ok && response.status !== 409) {
+        throw new Error(`KV 操作失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 好友系统
+// ============================================================================
+
+async function fetchFriends(token) {
+    const response = await fetch(`${SERVER_URL}/v1/friends`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取好友列表失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function searchUsers(token, query) {
+    const response = await fetch(`${SERVER_URL}/v1/user/search?${new URLSearchParams({ query })}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        if (response.status === 404) {
+            return { users: [] };
+        }
+        throw new Error(`搜索用户失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function fetchUser(token, userId) {
+    const response = await fetch(`${SERVER_URL}/v1/user/${userId}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (response.status === 404) {
+        return null;
+    }
+    
+    if (!response.ok) {
+        throw new Error(`获取用户资料失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function addFriend(token, userId) {
+    const response = await fetch(`${SERVER_URL}/v1/friends/add`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ uid: userId })
+    });
+    
+    if (!response.ok) {
+        throw new Error(`添加好友失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+async function removeFriend(token, userId) {
+    const response = await fetch(`${SERVER_URL}/v1/friends/remove`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ uid: userId })
+    });
+    
+    if (!response.ok) {
+        throw new Error(`移除好友失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - Feed 动态
+// ============================================================================
+
+async function fetchFeed(token, options = {}) {
+    const params = new URLSearchParams();
+    if (options.limit) params.set('limit', options.limit.toString());
+    if (options.before) params.set('before', options.before);
+    if (options.after) params.set('after', options.after);
+    
+    const url = `${SERVER_URL}/v1/feed${params.toString() ? `?${params}` : ''}`;
+    
+    const response = await fetch(url, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`获取 Feed 失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 会话删除
+// ============================================================================
+
+async function deleteSession(token, sessionId) {
+    const response = await fetch(`${SERVER_URL}/v1/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`删除会话失败: ${response.status}`);
+    }
+    
+    return response.json();
+}
+
+// ============================================================================
+// HTTP API - 服务连接
+// ============================================================================
+
+async function disconnectService(token, service) {
+    const response = await fetch(`${SERVER_URL}/v1/connect/${service}`, {
+        method: 'DELETE',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`断开服务失败: ${response.status}`);
+    }
 }
 
 // 获取当前 Token（从 main 函数中设置）
@@ -691,7 +1188,6 @@ function handleChatModeUpdate(data) {
             const role = decrypted.role || 'unknown';
             
             // 只显示 agent 的回复（用户消息是自己发的，不需要显示）
-            // 注意：源码中 agent 消息的 role 是 'agent'，不是 'assistant'
             if (role === 'agent') {
                 // 跳过 meta 消息和 sidechain 消息
                 const content = decrypted.content;
@@ -753,10 +1249,8 @@ async function connectWebSocket(token) {
         });
 
         socket.on('update', (data) => {
-            // 数据结构: { id, seq, body: { t, sid, ... }, createdAt }
             const sessionId = data.body?.sid || data.body?.id;
             
-            // 如果在对话模式中，处理当前会话的消息
             if (currentChatSessionId && sessionId === currentChatSessionId) {
                 handleChatModeUpdate(data);
             }
@@ -764,10 +1258,6 @@ async function connectWebSocket(token) {
 
         socket.on('ephemeral', (data) => {
             // 静默处理 ephemeral 更新 (心跳等)
-            // 如果需要调试，取消下面的注释
-            // if (data.type === 'activity') {
-            //     console.log(`[ephemeral] thinking=${data.thinking}, active=${data.active}`);
-            // }
         });
     });
 }
@@ -778,7 +1268,6 @@ async function sendMessage(sessionId, encryptedMessage, localId, permissionMode 
         return;
     }
     
-    // 直接发送消息（与源码一致，使用 emit 而不是 emitWithAck）
     socket.emit('message', {
         sid: sessionId,
         message: encryptedMessage,
@@ -789,11 +1278,19 @@ async function sendMessage(sessionId, encryptedMessage, localId, permissionMode 
 }
 
 // ============================================================================
-// 命令行界面
+// 命令行界面 - 全局状态
 // ============================================================================
 
 let encryption = null;
 let sessions = {};
+let machines = {};
+let cachedProfile = null;
+let cachedSettings = null;
+let cachedSettingsVersion = null;
+
+// ============================================================================
+// 显示函数 - 会话
+// ============================================================================
 
 async function displaySessions() {
     console.log('\n📋 获取会话列表...');
@@ -841,21 +1338,19 @@ async function displaySessions() {
     }
 }
 
-// 显示带编号的会话列表，返回编号到会话ID的映射
 async function displaySessionsWithIndex() {
     console.log('\n📋 获取会话列表...');
     
     try {
         const data = await fetchSessions(CURRENT_TOKEN);
         sessions = {};
-        const indexMap = {};  // { '1': 'full-session-id', ... }
+        const indexMap = {};
         
         if (!data.sessions || data.sessions.length === 0) {
             console.log('(暂无会话)');
             return indexMap;
         }
         
-        // 按活动状态和更新时间排序（活动的在前，最近更新的在前）
         const sorted = [...data.sessions].sort((a, b) => {
             if (a.active !== b.active) return b.active - a.active;
             return new Date(b.updatedAt) - new Date(a.updatedAt);
@@ -867,7 +1362,6 @@ async function displaySessionsWithIndex() {
             const session = sorted[i];
             sessions[session.id] = session;
             
-            // 初始化会话加密
             if (session.dataEncryptionKey) {
                 const decryptedKey = await encryption.decryptEncryptionKey(session.dataEncryptionKey);
                 await encryption.initializeSession(session.id, decryptedKey);
@@ -875,7 +1369,6 @@ async function displaySessionsWithIndex() {
                 await encryption.initializeSession(session.id, null);
             }
             
-            // 解密元数据
             let metadata = null;
             if (session.metadata) {
                 const enc = encryption.getSessionEncryption(session.id);
@@ -903,11 +1396,10 @@ async function displaySessionsWithIndex() {
 }
 
 async function displayMessages(sessionId) {
-    // 支持短 ID
     const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
     
     if (!sessions[fullId]) {
-        console.log('❌ 会话不存在，请先获取会话列表');
+        console.log('❌ 会话不存在，请先执行 sessions 命令');
         return;
     }
     
@@ -924,7 +1416,6 @@ async function displayMessages(sessionId) {
             return;
         }
         
-        // 只显示最近 10 条消息
         const recentMessages = data.messages.slice(-10);
         
         for (const msg of recentMessages) {
@@ -935,7 +1426,6 @@ async function displayMessages(sessionId) {
                 if (decrypted) {
                     const role = decrypted.role || 'unknown';
                     
-                    // 跳过 event 类型消息和 meta/sidechain 消息
                     if (role === 'agent') {
                         const content = decrypted.content;
                         if (content?.type === 'event') continue;
@@ -944,14 +1434,11 @@ async function displayMessages(sessionId) {
                         }
                     }
                     
-                    // 角色图标：user -> 👤, agent -> 🤖
                     const roleIcon = role === 'user' ? '👤' : role === 'agent' ? '🤖' : '📝';
                     const date = new Date(msg.createdAt).toLocaleTimeString();
                     
-                    // 使用统一的文本提取函数
                     let text = extractMessageText(decrypted);
                     
-                    // 截断过长的文本
                     if (text.length > 200) {
                         text = text.substring(0, 200) + '...';
                     }
@@ -967,11 +1454,10 @@ async function displayMessages(sessionId) {
 }
 
 async function sendUserMessage(sessionId, text, permissionMode = null) {
-    // 支持短 ID
     const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
     
     if (!sessions[fullId]) {
-        console.log('❌ 会话不存在，请先获取会话列表');
+        console.log('❌ 会话不存在，请先执行 sessions 命令');
         return;
     }
     
@@ -981,10 +1467,8 @@ async function sendUserMessage(sessionId, text, permissionMode = null) {
         return;
     }
     
-    // 使用传入的模式，或使用当前全局模式
     const mode = permissionMode || currentPermissionMode;
     
-    // 构建消息内容（与项目源码一致）
     const content = {
         role: 'user',
         content: {
@@ -997,14 +1481,10 @@ async function sendUserMessage(sessionId, text, permissionMode = null) {
         }
     };
     
-    // 加密消息
     const encrypted = encryption.encrypt(enc, content);
     const encryptedBase64 = encodeBase64(encrypted, 'base64');
-    
-    // 生成本地 ID
     const localId = crypto.randomUUID();
     
-    // 发送消息（同时在 WebSocket 层面也传递 permissionMode）
     await sendMessage(fullId, encryptedBase64, localId, mode);
 
     const modeDisplay = MODE_DISPLAY_NAMES[mode] || mode;
@@ -1012,155 +1492,640 @@ async function sendUserMessage(sessionId, text, permissionMode = null) {
 }
 
 // ============================================================================
-// 对话模式
+// 显示函数 - 账户
 // ============================================================================
 
-async function startChatMode(rl) {
-    // 1. 显示会话列表（带编号）
-    const indexMap = await displaySessionsWithIndex();
+async function displayProfile() {
+    console.log('\n👤 获取账户资料...');
     
-    if (Object.keys(indexMap).length === 0) {
-        console.log('没有可用的会话');
-        return;
-    }
-    
-    // 2. 等待用户选择
-    const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
-    const choice = await question('输入编号选择会话 (或输入 q 返回): ');
-    
-    if (choice.toLowerCase() === 'q' || choice.trim() === '') {
-        return;
-    }
-    
-    const sessionId = indexMap[parseInt(choice)];
-    if (!sessionId) {
-        console.log('❌ 无效的编号');
-        return;
-    }
-    
-    currentChatSessionId = sessionId;
-    chatModeRl = rl;
-    
-    // 获取会话信息用于显示
-    const session = sessions[sessionId];
-    let metadata = null;
-    if (session?.metadata) {
-        const enc = encryption.getSessionEncryption(sessionId);
-        const metadataData = decodeBase64(session.metadata, 'base64');
-        metadata = encryption.decrypt(enc, metadataData);
-    }
-    const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
-    
-    // 3. 显示最近消息
-    await displayMessages(sessionId);
-    
-    // 4. 进入对话循环
-    const modeDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
-    console.log('─'.repeat(50));
-    console.log(`💬 对话模式 - ${projectName}`);
-    console.log(`   当前模式: ${modeDisplay}`);
-    console.log('   /mode [模式] 切换模式 | /refresh 刷新 | /exit 退出');
-    console.log('─'.repeat(50));
-    
-    while (true) {
-        const input = await question('> ');
-        const trimmed = input.trim();
+    try {
+        const profile = await fetchProfile(CURRENT_TOKEN);
+        cachedProfile = profile;
         
-        if (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q') {
-            console.log('👋 退出对话模式');
-            break;
+        console.log('\n=== 账户资料 ===\n');
+        console.log(`用户 ID: ${profile.id}`);
+        console.log(`名字: ${profile.firstName || '(未设置)'}`);
+        console.log(`姓氏: ${profile.lastName || '(未设置)'}`);
+        console.log(`头像: ${profile.avatar?.url ? '✓ 已设置' : '✗ 未设置'}`);
+        
+        if (profile.github) {
+            console.log('\n--- GitHub 连接 ---');
+            console.log(`  用户名: ${profile.github.login}`);
+            console.log(`  名称: ${profile.github.name || '(无)'}`);
+            console.log(`  邮箱: ${profile.github.email || '(无)'}`);
+        } else {
+            console.log('\nGitHub: ✗ 未连接');
         }
         
-        if (trimmed === '/refresh' || trimmed === '/r') {
-            await displayMessages(sessionId);
-            continue;
+        if (profile.connectedServices && profile.connectedServices.length > 0) {
+            console.log(`\n已连接服务: ${profile.connectedServices.join(', ')}`);
         }
         
-        // /mode 命令：显示或切换权限模式
-        if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
-            const parts = trimmed.split(' ');
-            if (parts.length === 1) {
-                // 显示当前模式和可用模式
-                const currentDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
-                console.log(`\n当前模式: ${currentPermissionMode} (${currentDisplay})`);
-                console.log('\n可用模式:');
-                console.log('  Claude Code: default, acceptEdits, plan, bypassPermissions');
-                console.log('  Codex:       default, read-only, safe-yolo, yolo');
-                console.log('\n使用 /mode <模式名> 切换，例如: /mode yolo');
+        console.log('');
+    } catch (error) {
+        console.error('获取账户资料失败:', error.message);
+    }
+}
+
+async function displaySettings() {
+    console.log('\n⚙️  获取账户设置...');
+    
+    try {
+        const data = await fetchSettings(CURRENT_TOKEN);
+        
+        let settings = null;
+        if (data.settings) {
+            settings = encryption.decryptLegacy(data.settings);
+        }
+        
+        cachedSettings = settings;
+        cachedSettingsVersion = data.settingsVersion;
+        
+        console.log('\n=== 账户设置 ===\n');
+        
+        if (!settings) {
+            console.log('(使用默认设置)');
+            return;
+        }
+        
+        console.log(`视图内联工具调用: ${settings.viewInline ? '✓' : '✗'}`);
+        console.log(`展开 Todo 列表: ${settings.expandTodos ? '✓' : '✗'}`);
+        console.log(`显示行号: ${settings.showLineNumbers ? '✓' : '✗'}`);
+        console.log(`换行显示: ${settings.wrapLinesInDiffs ? '✓' : '✗'}`);
+        console.log(`分析数据收集: ${settings.analyticsOptOut ? '已禁用' : '已启用'}`);
+        console.log(`实验性功能: ${settings.experiments ? '✓' : '✗'}`);
+        console.log(`头像样式: ${settings.avatarStyle || 'brutalist'}`);
+        console.log(`紧凑会话视图: ${settings.compactSessionView ? '✓' : '✗'}`);
+        console.log(`隐藏不活动会话: ${settings.hideInactiveSessions ? '✓' : '✗'}`);
+        console.log(`界面语言: ${settings.preferredLanguage || '自动'}`);
+        console.log(`语音助手语言: ${settings.voiceAssistantLanguage || '自动'}`);
+        
+        if (settings.inferenceOpenAIKey) {
+            console.log(`OpenAI Key: ✓ 已设置`);
+        }
+        
+        console.log(`\n设置版本: ${data.settingsVersion || '未知'}`);
+        console.log('');
+    } catch (error) {
+        console.error('获取账户设置失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 机器
+// ============================================================================
+
+async function displayMachines() {
+    console.log('\n🖥️  获取机器列表...');
+    
+    try {
+        const data = await fetchMachines(CURRENT_TOKEN);
+        machines = {};
+        
+        console.log('\n=== 机器列表 ===\n');
+        
+        if (!Array.isArray(data) || data.length === 0) {
+            console.log('(暂无机器)');
+            return;
+        }
+        
+        for (const machine of data) {
+            machines[machine.id] = machine;
+            
+            // 初始化机器加密
+            if (machine.dataEncryptionKey) {
+                const decryptedKey = await encryption.decryptEncryptionKey(machine.dataEncryptionKey);
+                await encryption.initializeMachine(machine.id, decryptedKey);
             } else {
-                const newMode = parts[1].toLowerCase();
-                // 支持一些常见的别名
-                const modeAliases = {
-                    'readonly': 'read-only',
-                    'safeyolo': 'safe-yolo',
-                    'bypass': 'bypassPermissions',
-                    'accept': 'acceptEdits',
-                    'edit': 'acceptEdits',
-                    'edits': 'acceptEdits'
-                };
-                const normalizedMode = modeAliases[newMode] || newMode;
-                
-                if (VALID_MODES.includes(normalizedMode)) {
-                    currentPermissionMode = normalizedMode;
-                    const display = MODE_DISPLAY_NAMES[normalizedMode] || normalizedMode;
-                    console.log(`✅ 模式已切换为: ${normalizedMode} (${display})`);
-                } else {
-                    console.log(`❌ 无效的模式: ${newMode}`);
-                    console.log(`有效模式: ${VALID_MODES.join(', ')}`);
+                await encryption.initializeMachine(machine.id, null);
+            }
+            
+            // 解密元数据
+            let metadata = null;
+            if (machine.metadata) {
+                const enc = encryption.getMachineEncryption(machine.id);
+                if (enc) {
+                    const metadataData = decodeBase64(machine.metadata, 'base64');
+                    metadata = encryption.decrypt(enc, metadataData);
                 }
             }
-            continue;
+            
+            const status = machine.active ? '🟢 在线' : '⚪ 离线';
+            const hostname = metadata?.host || metadata?.hostname || '未知主机';
+            const platform = metadata?.os || metadata?.platform || '未知平台';
+            const date = new Date(machine.activeAt).toLocaleString();
+            
+            console.log(`${status} [${machine.id.substring(0, 8)}...] ${hostname}`);
+            console.log(`   平台: ${platform}`);
+            console.log(`   最后活跃: ${date}`);
+            console.log('');
+        }
+    } catch (error) {
+        console.error('获取机器列表失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 使用量
+// ============================================================================
+
+async function displayUsage(period = '7days') {
+    console.log(`\n📊 获取使用量统计 (${period})...`);
+    
+    try {
+        const now = Math.floor(Date.now() / 1000);
+        const oneDaySeconds = 24 * 60 * 60;
+        
+        let startTime;
+        let groupBy;
+        
+        switch (period) {
+            case 'today':
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                startTime = Math.floor(today.getTime() / 1000);
+                groupBy = 'hour';
+                break;
+            case '30days':
+                startTime = now - (30 * oneDaySeconds);
+                groupBy = 'day';
+                break;
+            case '7days':
+            default:
+                startTime = now - (7 * oneDaySeconds);
+                groupBy = 'day';
+                break;
         }
         
-        if (trimmed === '/help' || trimmed === '/?') {
-            console.log('\n命令:');
-            console.log('  /mode [模式]  - 显示或切换权限模式');
-            console.log('  /refresh      - 刷新消息列表');
-            console.log('  /exit         - 退出对话模式');
-            console.log('\n权限模式:');
-            console.log('  default          - 默认，会请求权限');
-            console.log('  acceptEdits      - 自动接受编辑');
-            console.log('  plan             - 计划模式');
-            console.log('  bypassPermissions- 跳过所有权限');
-            console.log('  read-only        - 只读模式 (Codex)');
-            console.log('  safe-yolo        - Safe YOLO (Codex)');
-            console.log('  yolo             - YOLO 模式 (Codex)');
-            continue;
+        const data = await queryUsage(CURRENT_TOKEN, {
+            startTime,
+            endTime: now,
+            groupBy
+        });
+        
+        console.log('\n=== 使用量统计 ===\n');
+        
+        if (!data.usage || data.usage.length === 0) {
+            console.log('(暂无使用记录)');
+            return;
         }
         
-        if (trimmed === '') {
-            continue;
+        let totalTokens = 0;
+        let totalCost = 0;
+        const tokensByModel = {};
+        const costByModel = {};
+        
+        for (const dataPoint of data.usage) {
+            for (const [model, tokens] of Object.entries(dataPoint.tokens || {})) {
+                if (typeof tokens === 'number') {
+                    totalTokens += tokens;
+                    tokensByModel[model] = (tokensByModel[model] || 0) + tokens;
+                }
+            }
+            
+            for (const [model, cost] of Object.entries(dataPoint.cost || {})) {
+                if (typeof cost === 'number') {
+                    totalCost += cost;
+                    costByModel[model] = (costByModel[model] || 0) + cost;
+                }
+            }
         }
         
-        // 发送消息
-        await sendUserMessage(sessionId, trimmed);
+        console.log(`总 Tokens: ${totalTokens.toLocaleString()}`);
+        console.log(`总费用: $${totalCost.toFixed(4)}`);
+        
+        if (Object.keys(tokensByModel).length > 0) {
+            console.log('\n--- 按模型统计 ---');
+            for (const [model, tokens] of Object.entries(tokensByModel)) {
+                const cost = costByModel[model] || 0;
+                console.log(`  ${model}: ${tokens.toLocaleString()} tokens ($${cost.toFixed(4)})`);
+            }
+        }
+        
+        console.log('');
+    } catch (error) {
+        console.error('获取使用量失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - Artifacts
+// ============================================================================
+
+async function displayArtifacts() {
+    console.log('\n📦 获取 Artifacts 列表...');
+    
+    try {
+        const artifacts = await fetchArtifacts(CURRENT_TOKEN);
+        
+        console.log('\n=== Artifacts 列表 ===\n');
+        
+        if (!Array.isArray(artifacts) || artifacts.length === 0) {
+            console.log('(暂无 Artifacts)');
+            return;
+        }
+        
+        for (const artifact of artifacts) {
+            // 初始化 Artifact 加密
+            if (artifact.dataEncryptionKey) {
+                const decryptedKey = await encryption.decryptEncryptionKey(artifact.dataEncryptionKey);
+                await encryption.initializeArtifact(artifact.id, decryptedKey);
+            } else {
+                await encryption.initializeArtifact(artifact.id, null);
+            }
+            
+            // 解密 header
+            let header = null;
+            if (artifact.header) {
+                const enc = encryption.getArtifactEncryption(artifact.id);
+                if (enc) {
+                    const headerData = decodeBase64(artifact.header, 'base64');
+                    header = encryption.decrypt(enc, headerData);
+                }
+            }
+            
+            const title = header?.title || '(无标题)';
+            const isDraft = header?.draft ? ' [草稿]' : '';
+            const date = new Date(artifact.updatedAt).toLocaleString();
+            
+            console.log(`📄 [${artifact.id.substring(0, 8)}...] ${title}${isDraft}`);
+            console.log(`   更新于: ${date}`);
+            console.log('');
+        }
+    } catch (error) {
+        console.error('获取 Artifacts 失败:', error.message);
+    }
+}
+
+async function displayArtifact(artifactId) {
+    console.log(`\n📄 获取 Artifact ${artifactId}...`);
+    
+    try {
+        const artifact = await fetchArtifact(CURRENT_TOKEN, artifactId);
+        
+        // 初始化加密
+        if (artifact.dataEncryptionKey) {
+            const decryptedKey = await encryption.decryptEncryptionKey(artifact.dataEncryptionKey);
+            await encryption.initializeArtifact(artifact.id, decryptedKey);
+        } else {
+            await encryption.initializeArtifact(artifact.id, null);
+        }
+        
+        const enc = encryption.getArtifactEncryption(artifact.id);
+        
+        // 解密 header
+        let header = null;
+        if (artifact.header && enc) {
+            const headerData = decodeBase64(artifact.header, 'base64');
+            header = encryption.decrypt(enc, headerData);
+        }
+        
+        // 解密 body
+        let body = null;
+        if (artifact.body && enc) {
+            const bodyData = decodeBase64(artifact.body, 'base64');
+            body = encryption.decrypt(enc, bodyData);
+        }
+        
+        console.log('\n=== Artifact 详情 ===\n');
+        console.log(`ID: ${artifact.id}`);
+        console.log(`标题: ${header?.title || '(无标题)'}`);
+        console.log(`草稿: ${header?.draft ? '是' : '否'}`);
+        console.log(`创建于: ${new Date(artifact.createdAt).toLocaleString()}`);
+        console.log(`更新于: ${new Date(artifact.updatedAt).toLocaleString()}`);
+        
+        if (body?.body) {
+            console.log('\n--- 内容 ---');
+            console.log(body.body.substring(0, 500) + (body.body.length > 500 ? '...' : ''));
+        }
+        
+        console.log('');
+    } catch (error) {
+        console.error('获取 Artifact 失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - KV 存储
+// ============================================================================
+
+async function displayKvList(prefix = '') {
+    console.log(`\n🔑 获取 KV 列表${prefix ? ` (前缀: ${prefix})` : ''}...`);
+    
+    try {
+        const data = await kvList(CURRENT_TOKEN, { prefix, limit: 100 });
+        
+        console.log('\n=== KV 列表 ===\n');
+        
+        if (!data.items || data.items.length === 0) {
+            console.log('(暂无数据)');
+            return;
+        }
+        
+        for (const item of data.items) {
+            const valuePreview = item.value.length > 50 
+                ? item.value.substring(0, 50) + '...' 
+                : item.value;
+            console.log(`[v${item.version}] ${item.key} = ${valuePreview}`);
+        }
+        
+        console.log(`\n共 ${data.items.length} 项`);
+        console.log('');
+    } catch (error) {
+        console.error('获取 KV 列表失败:', error.message);
+    }
+}
+
+async function displayKvGet(key) {
+    console.log(`\n🔑 获取 KV: ${key}...`);
+    
+    try {
+        const item = await kvGet(CURRENT_TOKEN, key);
+        
+        if (!item) {
+            console.log('❌ Key 不存在');
+            return;
+        }
+        
+        console.log('\n=== KV 值 ===\n');
+        console.log(`Key: ${item.key}`);
+        console.log(`Version: ${item.version}`);
+        console.log(`Value: ${item.value}`);
+        console.log('');
+    } catch (error) {
+        console.error('获取 KV 失败:', error.message);
+    }
+}
+
+async function kvSet(key, value) {
+    console.log(`\n🔑 设置 KV: ${key}...`);
+    
+    try {
+        // 先获取当前版本
+        const existing = await kvGet(CURRENT_TOKEN, key);
+        const version = existing ? existing.version : -1;
+        
+        const result = await kvMutate(CURRENT_TOKEN, [{
+            key,
+            value,
+            version
+        }]);
+        
+        if (result.success) {
+            console.log(`✅ 已设置 ${key}`);
+        } else {
+            console.log(`❌ 设置失败: ${result.errors?.[0]?.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('设置 KV 失败:', error.message);
+    }
+}
+
+async function kvDelete(key) {
+    console.log(`\n🔑 删除 KV: ${key}...`);
+    
+    try {
+        const existing = await kvGet(CURRENT_TOKEN, key);
+        
+        if (!existing) {
+            console.log('❌ Key 不存在');
+            return;
+        }
+        
+        const result = await kvMutate(CURRENT_TOKEN, [{
+            key,
+            value: null,
+            version: existing.version
+        }]);
+        
+        if (result.success) {
+            console.log(`✅ 已删除 ${key}`);
+        } else {
+            console.log(`❌ 删除失败: ${result.errors?.[0]?.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('删除 KV 失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 社交
+// ============================================================================
+
+async function displayFriends() {
+    console.log('\n👥 获取好友列表...');
+    
+    try {
+        const data = await fetchFriends(CURRENT_TOKEN);
+        
+        console.log('\n=== 好友列表 ===\n');
+        
+        if (!data.friends || data.friends.length === 0) {
+            console.log('(暂无好友)');
+            return;
+        }
+        
+        const statusIcons = {
+            'friend': '✓',
+            'pending': '⏳',
+            'requested': '📤',
+            'rejected': '✗',
+            'none': '○'
+        };
+        
+        for (const friend of data.friends) {
+            const icon = statusIcons[friend.status] || '○';
+            const name = [friend.firstName, friend.lastName].filter(Boolean).join(' ') || friend.username;
+            console.log(`${icon} ${name} (@${friend.username})`);
+            console.log(`   ID: ${friend.id.substring(0, 8)}... | 状态: ${friend.status}`);
+            if (friend.bio) {
+                console.log(`   简介: ${friend.bio.substring(0, 50)}${friend.bio.length > 50 ? '...' : ''}`);
+            }
+            console.log('');
+        }
+    } catch (error) {
+        console.error('获取好友列表失败:', error.message);
+    }
+}
+
+async function displaySearchUsers(query) {
+    console.log(`\n🔍 搜索用户: ${query}...`);
+    
+    try {
+        const data = await searchUsers(CURRENT_TOKEN, query);
+        
+        console.log('\n=== 搜索结果 ===\n');
+        
+        if (!data.users || data.users.length === 0) {
+            console.log('(未找到用户)');
+            return;
+        }
+        
+        for (const user of data.users) {
+            const name = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username;
+            console.log(`👤 ${name} (@${user.username})`);
+            console.log(`   ID: ${user.id}`);
+            if (user.bio) {
+                console.log(`   简介: ${user.bio.substring(0, 50)}${user.bio.length > 50 ? '...' : ''}`);
+            }
+            console.log('');
+        }
+    } catch (error) {
+        console.error('搜索用户失败:', error.message);
+    }
+}
+
+async function displayUser(userId) {
+    console.log(`\n👤 获取用户资料: ${userId}...`);
+    
+    try {
+        const data = await fetchUser(CURRENT_TOKEN, userId);
+        
+        if (!data || !data.user) {
+            console.log('❌ 用户不存在');
+            return;
+        }
+        
+        const user = data.user;
+        
+        console.log('\n=== 用户资料 ===\n');
+        console.log(`ID: ${user.id}`);
+        console.log(`用户名: @${user.username}`);
+        console.log(`名字: ${user.firstName || '(未设置)'}`);
+        console.log(`姓氏: ${user.lastName || '(未设置)'}`);
+        console.log(`头像: ${user.avatar?.url ? '✓ 已设置' : '✗ 未设置'}`);
+        console.log(`简介: ${user.bio || '(无)'}`);
+        console.log(`关系状态: ${user.status}`);
+        console.log('');
+    } catch (error) {
+        console.error('获取用户资料失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - Feed
+// ============================================================================
+
+async function displayFeed() {
+    console.log('\n📰 获取动态...');
+    
+    try {
+        const data = await fetchFeed(CURRENT_TOKEN, { limit: 20 });
+        
+        console.log('\n=== 动态 Feed ===\n');
+        
+        if (!data.items || data.items.length === 0) {
+            console.log('(暂无动态)');
+            return;
+        }
+        
+        for (const item of data.items) {
+            const date = new Date(item.createdAt).toLocaleString();
+            let content = '';
+            
+            switch (item.body.kind) {
+                case 'friend_request':
+                    content = `📤 收到好友请求 (用户 ${item.body.uid?.substring(0, 8)}...)`;
+                    break;
+                case 'friend_accepted':
+                    content = `✓ 好友请求已接受 (用户 ${item.body.uid?.substring(0, 8)}...)`;
+                    break;
+                case 'text':
+                    content = `📝 ${item.body.text}`;
+                    break;
+                default:
+                    content = `[${item.body.kind}]`;
+            }
+            
+            console.log(`[${date}] ${content}`);
+        }
+        
+        if (data.hasMore) {
+            console.log('\n(还有更多动态...)');
+        }
+        
+        console.log('');
+    } catch (error) {
+        console.error('获取动态失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 服务连接
+// ============================================================================
+
+async function displayConnectedServices() {
+    console.log('\n🔗 获取已连接服务...');
+    
+    try {
+        const profile = cachedProfile || await fetchProfile(CURRENT_TOKEN);
+        
+        console.log('\n=== 已连接服务 ===\n');
+        
+        if (profile.github) {
+            console.log(`✓ GitHub - @${profile.github.login}`);
+        } else {
+            console.log('✗ GitHub - 未连接');
+        }
+        
+        if (profile.connectedServices && profile.connectedServices.length > 0) {
+            for (const service of profile.connectedServices) {
+                if (service !== 'github') {
+                    console.log(`✓ ${service}`);
+                }
+            }
+        }
+        
+        console.log('');
+    } catch (error) {
+        console.error('获取服务连接状态失败:', error.message);
+    }
+}
+
+async function handleDisconnectService(service) {
+    console.log(`\n🔗 断开服务: ${service}...`);
+    
+    try {
+        await disconnectService(CURRENT_TOKEN, service);
+        console.log(`✅ 已断开 ${service}`);
+        cachedProfile = null; // 清除缓存
+    } catch (error) {
+        console.error(`断开服务失败:`, error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 会话删除
+// ============================================================================
+
+async function handleDeleteSession(sessionId) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    
+    if (!sessions[fullId]) {
+        console.log('❌ 会话不存在，请先执行 sessions 命令');
+        return;
     }
     
-    currentChatSessionId = null;
-    chatModeRl = null;
+    console.log(`\n🗑️  删除会话 ${fullId.substring(0, 8)}...`);
+    
+    try {
+        await deleteSession(CURRENT_TOKEN, fullId);
+        delete sessions[fullId];
+        console.log('✅ 会话已删除');
+    } catch (error) {
+        console.error('删除会话失败:', error.message);
+    }
 }
 
-async function showMenu() {
-    const modeDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
-    console.log('\n=== Happy Coder 最简客户端 ===');
-    console.log(`当前模式: ${currentPermissionMode} (${modeDisplay})`);
-    console.log('');
-    console.log('[1] 查看会话列表');
-    console.log('[2] 查看会话消息');
-    console.log('[3] 发送消息');
-    console.log('[4] 💬 进入对话模式');
-    console.log('[5] 🔍 诊断会话状态');
-    console.log('[6] ⚙️  切换权限模式');
-    console.log('[7] 退出');
-    console.log('');
-}
-
+// ============================================================================
 // 诊断会话状态
+// ============================================================================
+
 async function diagnoseSession(sessionId) {
     const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
     
     if (!sessions[fullId]) {
-        console.log('❌ 会话不存在，请先获取会话列表');
+        console.log('❌ 会话不存在，请先执行 sessions 命令');
         return;
     }
     
@@ -1172,7 +2137,6 @@ async function diagnoseSession(sessionId) {
     console.log(`最后活跃: ${new Date(session.activeAt).toLocaleString()}`);
     console.log(`更新时间: ${new Date(session.updatedAt).toLocaleString()}`);
     
-    // 解密并显示 agentState
     const enc = encryption.getSessionEncryption(fullId);
     console.log(`\n加密类型: ${enc ? enc.type : '未初始化'}`);
     console.log(`数据加密密钥: ${session.dataEncryptionKey ? '✓ 有' : '✗ 无'}`);
@@ -1195,13 +2159,8 @@ async function diagnoseSession(sessionId) {
         } catch (error) {
             console.log('无法解密 agentState:', error.message);
         }
-    } else {
-        console.log('\n--- Agent 状态 ---');
-        console.log(`enc=${!!enc}, session.agentState=${!!session.agentState}`);
-        console.log('无 agentState 数据或加密器未初始化');
     }
     
-    // 解密并显示 metadata
     if (enc && session.metadata) {
         try {
             const metadataData = decodeBase64(session.metadata, 'base64');
@@ -1212,92 +2171,413 @@ async function diagnoseSession(sessionId) {
                 console.log(`平台: ${metadata.os ?? metadata.platform ?? 'unknown'}`);
                 console.log(`主机名: ${metadata.host ?? metadata.hostname ?? 'unknown'}`);
                 console.log(`版本: ${metadata.version ?? 'unknown'}`);
-            } else {
-                console.log('解密返回 null');
             }
         } catch (error) {
             console.log('无法解密 metadata:', error.message);
         }
-    } else {
-        console.log('\n--- 元数据 ---');
-        console.log(`enc=${!!enc}, session.metadata=${!!session.metadata}`);
     }
     
     console.log('');
 }
 
+// ============================================================================
+// 对话模式
+// ============================================================================
+
+async function startChatMode(rl) {
+    const indexMap = await displaySessionsWithIndex();
+    
+    if (Object.keys(indexMap).length === 0) {
+        console.log('没有可用的会话');
+        return;
+    }
+    
+    const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
+    const choice = await question('输入编号选择会话 (或输入 q 返回): ');
+    
+    if (choice.toLowerCase() === 'q' || choice.trim() === '') {
+        return;
+    }
+    
+    const sessionId = indexMap[parseInt(choice)];
+    if (!sessionId) {
+        console.log('❌ 无效的编号');
+        return;
+    }
+    
+    currentChatSessionId = sessionId;
+    chatModeRl = rl;
+    
+    const session = sessions[sessionId];
+    let metadata = null;
+    if (session?.metadata) {
+        const enc = encryption.getSessionEncryption(sessionId);
+        const metadataData = decodeBase64(session.metadata, 'base64');
+        metadata = encryption.decrypt(enc, metadataData);
+    }
+    const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
+    
+    await displayMessages(sessionId);
+    
+    const modeDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
+    console.log('─'.repeat(50));
+    console.log(`💬 对话模式 - ${projectName}`);
+    console.log(`   当前模式: ${modeDisplay}`);
+    console.log('   /mode [模式] 切换模式 | /refresh 刷新 | /exit 退出');
+    console.log('─'.repeat(50));
+    
+    while (true) {
+        const input = await question('> ');
+        const trimmed = input.trim();
+        
+        if (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q') {
+            console.log('👋 退出对话模式');
+            break;
+        }
+        
+        if (trimmed === '/refresh' || trimmed === '/r') {
+            await displayMessages(sessionId);
+            continue;
+        }
+        
+        if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
+            const parts = trimmed.split(' ');
+            if (parts.length === 1) {
+                const currentDisplay = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
+                console.log(`\n当前模式: ${currentPermissionMode} (${currentDisplay})`);
+                console.log('\n可用模式: ' + VALID_MODES.join(', '));
+            } else {
+                const newMode = parts[1].toLowerCase();
+                const modeAliases = {
+                    'readonly': 'read-only',
+                    'safeyolo': 'safe-yolo',
+                    'bypass': 'bypassPermissions',
+                    'accept': 'acceptEdits'
+                };
+                const normalizedMode = modeAliases[newMode] || newMode;
+                
+                if (VALID_MODES.includes(normalizedMode)) {
+                    currentPermissionMode = normalizedMode;
+                    console.log(`✅ 模式已切换为: ${normalizedMode}`);
+                } else {
+                    console.log(`❌ 无效的模式: ${newMode}`);
+                }
+            }
+            continue;
+        }
+        
+        if (trimmed === '/help' || trimmed === '/?') {
+            console.log('\n对话模式命令:');
+            console.log('  /mode [模式]  - 显示或切换权限模式');
+            console.log('  /refresh      - 刷新消息列表');
+            console.log('  /exit         - 退出对话模式');
+            continue;
+        }
+        
+        if (trimmed === '') {
+            continue;
+        }
+        
+        await sendUserMessage(sessionId, trimmed);
+    }
+    
+    currentChatSessionId = null;
+    chatModeRl = null;
+}
+
+// ============================================================================
+// 帮助命令
+// ============================================================================
+
+function showHelp() {
+    console.log(`
+=== Happy Coder 客户端命令 ===
+
+会话管理:
+  sessions, list, ls     查看会话列表
+  messages <id>          查看会话消息
+  send <id> <text>       发送消息
+  delete <id>            删除会话
+  chat                   进入对话模式
+  diagnose <id>          诊断会话状态
+
+账户管理:
+  profile                查看账户资料
+  settings               查看账户设置
+
+设备管理:
+  machines               查看机器列表
+
+使用统计:
+  usage [period]         查看使用量 (today/7days/30days)
+
+制品管理:
+  artifacts              查看 Artifacts 列表
+  artifact <id>          查看 Artifact 详情
+
+KV 存储:
+  kv [prefix]            列出 KV 数据
+  kv get <key>           获取 KV 值
+  kv set <key> <value>   设置 KV 值
+  kv delete <key>        删除 KV 值
+
+社交功能:
+  friends                查看好友列表
+  search <query>         搜索用户
+  user <id>              查看用户资料
+  feed                   查看动态
+
+服务连接:
+  services               查看已连接服务
+  disconnect <service>   断开服务连接
+
+其他:
+  mode [mode]            显示/切换权限模式
+  help, ?                显示此帮助
+  quit, exit, q          退出程序
+
+可用权限模式: ${VALID_MODES.join(', ')}
+`);
+}
+
+// ============================================================================
+// 命令处理器
+// ============================================================================
+
+async function processCommand(input, rl) {
+    const parts = input.trim().split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    const args = parts.slice(1);
+    
+    switch (cmd) {
+        // 会话管理
+        case 'sessions':
+        case 'list':
+        case 'ls':
+            await displaySessions();
+            break;
+        
+        case 'messages':
+        case 'msg':
+            if (args[0]) {
+                await displayMessages(args[0]);
+            } else {
+                console.log('用法: messages <session-id>');
+            }
+            break;
+        
+        case 'send':
+            if (args.length >= 2) {
+                const sessionId = args[0];
+                const text = args.slice(1).join(' ');
+                await sendUserMessage(sessionId, text);
+            } else {
+                console.log('用法: send <session-id> <message>');
+            }
+            break;
+        
+        case 'delete':
+        case 'del':
+            if (args[0]) {
+                await handleDeleteSession(args[0]);
+            } else {
+                console.log('用法: delete <session-id>');
+            }
+            break;
+        
+        case 'chat':
+            await startChatMode(rl);
+            break;
+        
+        case 'diagnose':
+        case 'diag':
+            if (args[0]) {
+                await diagnoseSession(args[0]);
+            } else {
+                console.log('用法: diagnose <session-id>');
+            }
+            break;
+        
+        // 账户管理
+        case 'profile':
+            await displayProfile();
+            break;
+        
+        case 'settings':
+            await displaySettings();
+            break;
+        
+        // 设备管理
+        case 'machines':
+            await displayMachines();
+            break;
+        
+        // 使用统计
+        case 'usage':
+            await displayUsage(args[0] || '7days');
+            break;
+        
+        // 制品管理
+        case 'artifacts':
+            await displayArtifacts();
+            break;
+        
+        case 'artifact':
+            if (args[0]) {
+                await displayArtifact(args[0]);
+            } else {
+                console.log('用法: artifact <artifact-id>');
+            }
+            break;
+        
+        // KV 存储
+        case 'kv':
+            if (args[0] === 'get' && args[1]) {
+                await displayKvGet(args[1]);
+            } else if (args[0] === 'set' && args.length >= 3) {
+                await kvSet(args[1], args.slice(2).join(' '));
+            } else if (args[0] === 'delete' && args[1]) {
+                await kvDelete(args[1]);
+            } else {
+                await displayKvList(args[0] || '');
+            }
+            break;
+        
+        // 社交功能
+        case 'friends':
+            await displayFriends();
+            break;
+        
+        case 'search':
+            if (args[0]) {
+                await displaySearchUsers(args.join(' '));
+            } else {
+                console.log('用法: search <username>');
+            }
+            break;
+        
+        case 'user':
+            if (args[0]) {
+                await displayUser(args[0]);
+            } else {
+                console.log('用法: user <user-id>');
+            }
+            break;
+        
+        case 'feed':
+            await displayFeed();
+            break;
+        
+        // 服务连接
+        case 'services':
+            await displayConnectedServices();
+            break;
+        
+        case 'disconnect':
+            if (args[0]) {
+                await handleDisconnectService(args[0]);
+            } else {
+                console.log('用法: disconnect <service>');
+            }
+            break;
+        
+        // 模式切换
+        case 'mode':
+            if (args[0]) {
+                const modeAliases = {
+                    'readonly': 'read-only',
+                    'safeyolo': 'safe-yolo',
+                    'bypass': 'bypassPermissions',
+                    'accept': 'acceptEdits'
+                };
+                const newMode = modeAliases[args[0].toLowerCase()] || args[0].toLowerCase();
+                
+                if (VALID_MODES.includes(newMode)) {
+                    currentPermissionMode = newMode;
+                    const display = MODE_DISPLAY_NAMES[newMode] || newMode;
+                    console.log(`✅ 模式已切换为: ${newMode} (${display})`);
+                } else {
+                    console.log(`❌ 无效的模式: ${args[0]}`);
+                    console.log(`可用模式: ${VALID_MODES.join(', ')}`);
+                }
+            } else {
+                const display = MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode;
+                console.log(`当前模式: ${currentPermissionMode} (${display})`);
+                console.log(`可用模式: ${VALID_MODES.join(', ')}`);
+            }
+            break;
+        
+        // 帮助
+        case 'help':
+        case '?':
+            showHelp();
+            break;
+        
+        // 退出
+        case 'quit':
+        case 'exit':
+        case 'q':
+            return false;
+        
+        default:
+            if (cmd) {
+                console.log(`❓ 未知命令: ${cmd}`);
+                console.log('输入 help 查看可用命令');
+            }
+    }
+    
+    return true;
+}
+
+// ============================================================================
+// 主函数
+// ============================================================================
+
 async function main() {
-    // 检查 Secret Key
-    if (!SECRET) {
-        console.error('❌ 请提供 Secret Key');
-        console.log('');
-        console.log('使用方式:');
-        console.log('  node scripts/mini-client.js --secret=YOUR_SECRET_KEY');
-        console.log('');
-        console.log('或通过环境变量 (.env 文件):');
-        console.log('  HAPPY_SECRET=your_secret_key_here');
-        console.log('');
-        console.log('Secret Key 可以是:');
-        console.log('  - 格式化版本: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX');
-        console.log('  - Base64URL 版本: abc123def456...');
+    console.log('\n🚀 Happy Coder 客户端 v2.0.0');
+    console.log(`📡 服务器: ${SERVER_URL}`);
+    console.log(`🔐 权限模式: ${currentPermissionMode}`);
+    console.log('');
+
+    // 获取 Token
+    let token = CURRENT_TOKEN || TOKEN;
+
+    if (!token && SECRET) {
+        console.log('🔑 从 Secret Key 获取 Token...');
+        try {
+            const normalizedSecret = normalizeSecretKey(SECRET);
+            const secretBytes = decodeBase64(normalizedSecret, 'base64url');
+            
+            token = await authGetToken(secretBytes, SERVER_URL);
+            console.log('✅ Token 获取成功');
+            
+            // 初始化加密管理器
+            encryption = await Encryption.create(secretBytes);
+            console.log('✅ 加密管理器已初始化');
+        } catch (error) {
+            console.error('❌ 获取 Token 失败:', error.message);
+            process.exit(1);
+        }
+    } else if (!token) {
+        console.error('❌ 请提供 --token 或 --secret 参数');
+        console.log('   或设置环境变量 HAPPY_TOKEN / HAPPY_SECRET');
         process.exit(1);
     }
 
-    console.log(`🔗 服务器: ${SERVER_URL}`);
-    console.log(`⚙️  权限模式: ${currentPermissionMode} (${MODE_DISPLAY_NAMES[currentPermissionMode] || currentPermissionMode})`);
-    
-    let token = TOKEN;
-    let secret = SECRET;
-    
-    // 如果没有提供 Token，从 Secret Key 恢复
-    if (!token) {
-        console.log('🔑 未提供 Token，正在从 Secret Key 恢复...');
-        
+    CURRENT_TOKEN = token;
+
+    // 如果只有 token 没有 secret，尝试初始化加密
+    if (!encryption && SECRET) {
         try {
-            // 标准化 Secret Key
-            const normalizedSecret = normalizeSecretKey(secret);
+            const normalizedSecret = normalizeSecretKey(SECRET);
             const secretBytes = decodeBase64(normalizedSecret, 'base64url');
-            
-            if (secretBytes.length !== 32) {
-                throw new Error(`Secret Key 长度无效: ${secretBytes.length}, 需要 32 字节`);
-            }
-            
-            // 从 Secret Key 获取 Token
-            token = await authGetToken(secretBytes, SERVER_URL);
-            secret = normalizedSecret; // 使用标准化后的 Secret
-            
-            console.log('✅ Token 恢复成功');
+            encryption = await Encryption.create(secretBytes);
+            console.log('✅ 加密管理器已初始化');
         } catch (error) {
-            console.error('❌ 从 Secret Key 恢复 Token 失败:', error.message);
-            console.log('');
-            console.log('可能的原因:');
-            console.log('  1. Secret Key 格式不正确');
-            console.log('  2. Secret Key 不属于此服务器');
-            console.log('  3. 网络连接问题');
-            process.exit(1);
-        }
-    } else {
-        // 如果提供了 Token，也需要标准化 Secret Key
-        try {
-            secret = normalizeSecretKey(secret);
-        } catch (error) {
-            console.error('❌ Secret Key 格式错误:', error.message);
-            process.exit(1);
+            console.error('⚠️ 加密管理器初始化失败:', error.message);
         }
     }
-    
-    console.log('🔐 正在初始化加密...');
-    
-    // 初始化加密
-    const masterSecret = decodeBase64(secret, 'base64url');
-    if (masterSecret.length !== 32) {
-        console.error(`❌ Secret 长度无效: ${masterSecret.length}, 需要 32 字节`);
-        process.exit(1);
-    }
-    
-    encryption = await Encryption.create(masterSecret);
-    console.log('✅ 加密初始化完成');
-    
+
     // 连接 WebSocket
     console.log('🔌 正在连接 WebSocket...');
     try {
@@ -1306,10 +2586,7 @@ async function main() {
         console.error('❌ WebSocket 连接失败:', error.message);
         console.log('将继续使用 HTTP API...');
     }
-    
-    // 更新全局 TOKEN 变量（用于后续 API 调用）
-    CURRENT_TOKEN = token;
-    
+
     // 创建 readline 接口
     const rl = readline.createInterface({
         input: process.stdin,
@@ -1321,36 +2598,29 @@ async function main() {
     // 自动诊断模式
     if (AUTO_DIAGNOSE) {
         console.log(`\n🔍 自动诊断模式: ${AUTO_DIAGNOSE}`);
-        // 先获取会话列表
         await displaySessions();
-        // 然后诊断指定会话
         await diagnoseSession(AUTO_DIAGNOSE);
         rl.close();
         if (socket) socket.close();
         process.exit(0);
     }
-    
+
     // 自动测试模式
     if (AUTO_TEST) {
         console.log(`\n🧪 自动测试模式: ${AUTO_TEST}`);
-        // 先获取会话列表
         await displaySessions();
         
-        // 设置当前会话以接收实时更新
         const fullId = Object.keys(sessions).find(id => id.startsWith(AUTO_TEST)) || AUTO_TEST;
         currentChatSessionId = fullId;
         chatModeRl = rl;
         
-        // 发送测试消息
         const testMessage = '你好，这是来自 mini-client 的测试消息，请简短回复';
         console.log(`\n📤 发送测试消息: "${testMessage}"`);
         await sendUserMessage(AUTO_TEST, testMessage);
         
-        // 等待 15 秒看看有没有回复
         console.log('\n⏳ 等待 15 秒接收回复...');
         await new Promise(resolve => setTimeout(resolve, 15000));
         
-        // 获取并显示最新消息
         console.log('\n📥 获取最新消息:');
         await displayMessages(AUTO_TEST);
         
@@ -1359,103 +2629,32 @@ async function main() {
         process.exit(0);
     }
 
-    // 主循环
-    while (true) {
-        await showMenu();
-        const choice = await question('请选择操作: ');
-        
-        switch (choice.trim()) {
-            case '1':
-                await displaySessions();
-                break;
-            
-            case '2':
-                const sessionIdForView = await question('请输入会话 ID (可以只输入前几位): ');
-                if (sessionIdForView.trim()) {
-                    await displayMessages(sessionIdForView.trim());
-                }
-                break;
-            
-            case '3':
-                const sessionIdForSend = await question('请输入会话 ID (可以只输入前几位): ');
-                if (sessionIdForSend.trim()) {
-                    const message = await question('请输入消息内容: ');
-                    if (message.trim()) {
-                        await sendUserMessage(sessionIdForSend.trim(), message.trim());
-                    }
-                }
-                break;
-            
-            case '4':
-                await startChatMode(rl);
-                break;
-            
-            case '5':
-                const sessionIdForDiag = await question('请输入会话 ID (可以只输入前几位): ');
-                if (sessionIdForDiag.trim()) {
-                    await diagnoseSession(sessionIdForDiag.trim());
-                }
-                break;
-            
-            case '6':
-                // 切换权限模式
-                console.log('\n可用的权限模式:');
-                VALID_MODES.forEach((mode, index) => {
-                    const display = MODE_DISPLAY_NAMES[mode] || mode;
-                    const marker = mode === currentPermissionMode ? ' ✓' : '';
-                    console.log(`  [${index + 1}] ${mode} (${display})${marker}`);
-                });
-                console.log('');
-                const modeChoice = await question('选择模式编号 (或直接输入模式名): ');
-                const trimmedChoice = modeChoice.trim().toLowerCase();
-                
-                if (trimmedChoice) {
-                    // 支持编号选择
-                    const modeIndex = parseInt(trimmedChoice) - 1;
-                    let newMode = null;
-                    
-                    if (!isNaN(modeIndex) && modeIndex >= 0 && modeIndex < VALID_MODES.length) {
-                        newMode = VALID_MODES[modeIndex];
-                    } else {
-                        // 支持名称输入和别名
-                        const modeAliases = {
-                            'readonly': 'read-only',
-                            'safeyolo': 'safe-yolo',
-                            'bypass': 'bypassPermissions',
-                            'accept': 'acceptEdits',
-                            'edit': 'acceptEdits',
-                            'edits': 'acceptEdits'
-                        };
-                        newMode = modeAliases[trimmedChoice] || trimmedChoice;
-                    }
-                    
-                    if (VALID_MODES.includes(newMode)) {
-                        currentPermissionMode = newMode;
-                        const display = MODE_DISPLAY_NAMES[newMode] || newMode;
-                        console.log(`✅ 模式已切换为: ${newMode} (${display})`);
-                    } else {
-                        console.log(`❌ 无效的模式: ${trimmedChoice}`);
-                    }
-                }
-                break;
-            
-            case '7':
-            case 'q':
-            case 'quit':
-            case 'exit':
-                console.log('👋 再见!');
-                rl.close();
-                if (socket) socket.close();
-                process.exit(0);
-                break;
+    // 显示帮助
+    console.log('输入 help 查看可用命令\n');
 
-            default:
-                console.log('❓ 无效选择，请重试');
+    // 主循环 - 命令行模式
+    while (true) {
+        const input = await question('happy> ');
+        
+        if (!input.trim()) {
+            continue;
+        }
+        
+        const shouldContinue = await processCommand(input, rl);
+        
+        if (!shouldContinue) {
+            console.log('👋 再见!');
+            rl.close();
+            if (socket) socket.close();
+            process.exit(0);
         }
     }
 }
 
+// ============================================================================
 // 启动
+// ============================================================================
+
 main().catch(error => {
     console.error('❌ 程序错误:', error);
     process.exit(1);
