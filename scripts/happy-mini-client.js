@@ -2,8 +2,8 @@
  * HappyMiniClient - Happy Coder 完整命令行客户端
  * 
  * > 创建时间: 2025-12-20
- * > 最后更新: 2025-12-21
- * > 当前版本: 2.0.0
+ * > 最后更新: 2025-12-26
+ * > 当前版本: 2.1.0
  * 
  * 功能简介：
  * ==========
@@ -13,6 +13,7 @@
  * 支持的功能：
  * -----------
  * - 会话管理 - 查看会话列表、消息、发送消息、删除会话
+ * - 会话控制 - 软中止(abort)、硬中止(kill)操作
  * - 账户管理 - 查看/修改资料和设置
  * - 机器管理 - 查看 CLI 实例列表和状态
  * - 使用量统计 - 查询 Token 使用量和费用
@@ -55,6 +56,14 @@
  * 
  * CHANGELOG：
  * ==========
+ * 
+ * ## [2.1.0] - 2025-12-26
+ * 
+ * ### 新增
+ * - ✨ 软中止功能 (abort) - 中止当前操作，会话继续存活
+ * - ✨ 硬中止功能 (kill) - 完全终止会话进程
+ * - ✨ 对话模式快捷命令 /abort、/stop、/kill
+ * - ✨ Session RPC 通用调用函数
  * 
  * ## [2.0.0] - 2025-12-21
  * 
@@ -1278,6 +1287,77 @@ async function sendMessage(sessionId, encryptedMessage, localId, permissionMode 
 }
 
 // ============================================================================
+// Session RPC 调用
+// ============================================================================
+
+async function sessionRPC(sessionId, method, params = {}) {
+    if (!socket) throw new Error('WebSocket 未连接');
+    
+    const enc = encryption.getSessionEncryption(sessionId);
+    if (!enc) throw new Error('会话加密未初始化');
+    
+    const encrypted = encryption.encrypt(enc, params);
+    const encryptedBase64 = encodeBase64(encrypted, 'base64');
+    
+    const result = await socket.emitWithAck('rpc-call', {
+        method: `${sessionId}:${method}`,
+        params: encryptedBase64
+    });
+    
+    if (result.ok) {
+        if (result.result) {
+            const decrypted = encryption.decrypt(enc, decodeBase64(result.result, 'base64'));
+            return decrypted;
+        }
+        return {};
+    }
+    throw new Error('RPC 调用失败');
+}
+
+// 软中止 - 中止当前操作
+async function sessionAbort(sessionId) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        console.log('❌ 会话不存在');
+        return;
+    }
+    
+    console.log(`\n⏹️  中止会话 ${fullId.substring(0, 8)}... 的当前操作`);
+    
+    try {
+        await sessionRPC(fullId, 'abort', {
+            reason: `The user doesn't want to proceed with this tool use. The tool use was rejected. STOP what you are doing and wait for the user to tell you how to proceed.`
+        });
+        console.log('✅ 已发送中止请求');
+    } catch (error) {
+        console.error('中止失败:', error.message);
+    }
+}
+
+// 硬中止 - 杀死会话进程
+async function sessionKillSession(sessionId) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        console.log('❌ 会话不存在');
+        return;
+    }
+    
+    console.log(`\n💀 终止会话 ${fullId.substring(0, 8)}...`);
+    
+    try {
+        const result = await sessionRPC(fullId, 'killSession', {});
+        if (result?.success !== false) {
+            console.log('✅ 会话已终止');
+            delete sessions[fullId];
+        } else {
+            console.log('❌ 终止失败:', result?.message || '未知错误');
+        }
+    } catch (error) {
+        console.error('终止失败:', error.message);
+    }
+}
+
+// ============================================================================
 // 命令行界面 - 全局状态
 // ============================================================================
 
@@ -2223,7 +2303,7 @@ async function startChatMode(rl) {
     console.log('─'.repeat(50));
     console.log(`💬 对话模式 - ${projectName}`);
     console.log(`   当前模式: ${modeDisplay}`);
-    console.log('   /mode [模式] 切换模式 | /refresh 刷新 | /exit 退出');
+    console.log('   /abort 或 /stop 软中止 | /kill 硬中止 | /exit 退出');
     console.log('─'.repeat(50));
     
     while (true) {
@@ -2238,6 +2318,17 @@ async function startChatMode(rl) {
         if (trimmed === '/refresh' || trimmed === '/r') {
             await displayMessages(sessionId);
             continue;
+        }
+        
+        if (trimmed === '/abort' || trimmed === '/stop') {
+            await sessionAbort(sessionId);
+            continue;
+        }
+        
+        if (trimmed === '/kill') {
+            await sessionKillSession(sessionId);
+            console.log('👋 会话已终止，退出对话模式');
+            break;
         }
         
         if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
@@ -2297,6 +2388,8 @@ function showHelp() {
   sessions, list, ls     查看会话列表
   messages <id>          查看会话消息
   send <id> <text>       发送消息
+  abort <id>             软中止当前操作（会话继续存活）
+  kill <id>              硬中止会话（终止进程）
   delete <id>            删除会话
   chat                   进入对话模式
   diagnose <id>          诊断会话状态
@@ -2382,6 +2475,23 @@ async function processCommand(input, rl) {
                 await handleDeleteSession(args[0]);
             } else {
                 console.log('用法: delete <session-id>');
+            }
+            break;
+        
+        case 'abort':
+        case 'stop':
+            if (args[0]) {
+                await sessionAbort(args[0]);
+            } else {
+                console.log('用法: abort <session-id>');
+            }
+            break;
+        
+        case 'kill':
+            if (args[0]) {
+                await sessionKillSession(args[0]);
+            } else {
+                console.log('用法: kill <session-id>');
             }
             break;
         
