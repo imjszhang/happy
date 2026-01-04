@@ -75,13 +75,12 @@ function NotAuthenticated() {
                     </View>
                     <View style={styles.buttonContainerSecondary}>
                         <RoundButton
-                            size="normal"
                             title={t('welcome.loginWithSecretKey')}
                             onPress={() => {
                                 trackAccountRestored();
                                 router.push('/restore/manual');
                             }}
-                            display="inverted"
+                            display="secondary"
                         />
                     </View>
                     <View style={styles.buttonContainerSecondary}>
@@ -147,13 +146,12 @@ function NotAuthenticated() {
                             </View>
                             <View style={styles.landscapeButtonContainerSecondary}>
                                 <RoundButton
-                                    size="normal"
                                     title={t('welcome.loginWithSecretKey')}
                                     onPress={() => {
                                         trackAccountRestored();
                                         router.push('/restore/manual');
                                     }}
-                                    display="inverted"
+                                    display="secondary"
                                 />
                             </View>
                             <View style={styles.landscapeButtonContainerSecondary}>
@@ -231,6 +229,9 @@ const styles = StyleSheet.create((theme) => ({
         marginBottom: 16,
     },
     buttonContainerSecondary: {
+        maxWidth: 280,
+        width: '100%',
+        marginBottom: 8,
     },
     // Landscape styles
     landscapeContainer: {

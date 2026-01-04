@@ -11,7 +11,7 @@ const sizes: { [key in RoundButtonSize]: { height: number, fontSize: number, hit
     small: { height: 24, fontSize: 14, hitSlop: 12, pad: Platform.OS == 'ios' ? -1 : -1 }
 }
 
-export type RoundButtonDisplay = 'default' | 'inverted';
+export type RoundButtonDisplay = 'default' | 'secondary' | 'inverted';
 
 const stylesheet = StyleSheet.create((theme) => ({
     loadingContainer: {
@@ -67,6 +67,11 @@ export const RoundButton = React.memo((props: { size?: RoundButtonSize, display?
             backgroundColor: theme.colors.button.primary.background,
             borderColor: 'transparent',
             textColor: theme.colors.button.primary.tint
+        },
+        secondary: {
+            backgroundColor: 'transparent',
+            borderColor: theme.colors.border,
+            textColor: theme.colors.text,
         },
         inverted: {
             backgroundColor: 'transparent',
