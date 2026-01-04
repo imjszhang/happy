@@ -36,8 +36,8 @@
  * # 基本使用
  * node scripts/happy-mini-client.js --secret=YOUR_SECRET
  * 
- * # 指定服务器和模式
- * node scripts/happy-mini-client.js --secret=xxx --server=URL --mode=yolo
+ * # 指定服务器、API Key 和模式
+ * node scripts/happy-mini-client.js --secret=xxx --server=URL --apikey=KEY --mode=yolo
  * 
  * # 交互式命令
  * > profile          # 查看账户资料
@@ -56,6 +56,13 @@
  * 
  * CHANGELOG：
  * ==========
+ * 
+ * ## [2.2.0] - 2026-01-04
+ * 
+ * ### 新增
+ * - ✨ X-API-Key 认证支持 - 支持服务器 API Key 保护
+ * - ✨ --apikey 命令行参数和 HAPPY_API_KEY 环境变量
+ * - ✨ WebSocket 连接支持 API Key (extraHeaders)
  * 
  * ## [2.1.0] - 2025-12-26
  * 
@@ -181,6 +188,7 @@ const args = parseArgs();
 const TOKEN = args.token || process.env.HAPPY_TOKEN;
 const SECRET = args.secret || process.env.HAPPY_SECRET;
 const SERVER_URL = args.server || process.env.HAPPY_SERVER_URL || DEFAULT_SERVER_URL;
+const API_KEY = args.apikey || args['api-key'] || process.env.HAPPY_API_KEY;
 const AUTO_DIAGNOSE = args.diagnose;  // --diagnose=sessionId
 const AUTO_TEST = args.test;  // --test=sessionId  (发送测试消息)
 
@@ -624,12 +632,15 @@ async function authGetToken(secret, serverUrl) {
         // 生成挑战签名
         const { challenge, signature, publicKey } = await authChallenge(secret);
         
+        // 构建请求头（包含 API Key）
+        const headers = getApiKeyHeader();
+        
         // 发送到服务器验证
         const response = await axios.post(`${serverUrl}/v1/auth`, {
             challenge: encodeBase64(challenge, 'base64'),
             signature: encodeBase64(signature, 'base64'),
             publicKey: encodeBase64(publicKey, 'base64')
-        });
+        }, { headers });
         
         return response.data.token;
     } catch (error) {
@@ -644,15 +655,46 @@ async function authGetToken(secret, serverUrl) {
 }
 
 // ============================================================================
+// HTTP API - 通用 Headers
+// ============================================================================
+
+/**
+ * 获取通用请求头 (包含 X-API-Key 和 Authorization)
+ */
+function getCommonHeaders(token) {
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    
+    if (API_KEY) {
+        headers['X-API-Key'] = API_KEY;
+    }
+    
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+}
+
+/**
+ * 获取仅 API Key 的请求头 (用于认证前的请求)
+ */
+function getApiKeyHeader() {
+    const headers = {};
+    if (API_KEY) {
+        headers['X-API-Key'] = API_KEY;
+    }
+    return headers;
+}
+
+// ============================================================================
 // HTTP API - 基础
 // ============================================================================
 
 async function fetchSessions(token) {
     const response = await fetch(`${SERVER_URL}/v1/sessions`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -664,10 +706,7 @@ async function fetchSessions(token) {
 
 async function fetchMessages(token, sessionId) {
     const response = await fetch(`${SERVER_URL}/v1/sessions/${sessionId}/messages`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -683,10 +722,7 @@ async function fetchMessages(token, sessionId) {
 
 async function fetchProfile(token) {
     const response = await fetch(`${SERVER_URL}/v1/account/profile`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -702,10 +738,7 @@ async function fetchProfile(token) {
 
 async function fetchSettings(token) {
     const response = await fetch(`${SERVER_URL}/v1/account/settings`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -718,10 +751,7 @@ async function fetchSettings(token) {
 async function updateSettings(token, settings, version) {
     const response = await fetch(`${SERVER_URL}/v1/account/settings`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify({
             settings: settings,
             version: version
@@ -741,10 +771,7 @@ async function updateSettings(token, settings, version) {
 
 async function fetchMachines(token) {
     const response = await fetch(`${SERVER_URL}/v1/machines`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -761,10 +788,7 @@ async function fetchMachines(token) {
 async function queryUsage(token, params = {}) {
     const response = await fetch(`${SERVER_URL}/v1/usage/query`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify(params)
     });
     
@@ -781,10 +805,7 @@ async function queryUsage(token, params = {}) {
 
 async function fetchArtifacts(token) {
     const response = await fetch(`${SERVER_URL}/v1/artifacts`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -796,10 +817,7 @@ async function fetchArtifacts(token) {
 
 async function fetchArtifact(token, artifactId) {
     const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -815,10 +833,7 @@ async function fetchArtifact(token, artifactId) {
 async function createArtifact(token, data) {
     const response = await fetch(`${SERVER_URL}/v1/artifacts`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify(data)
     });
     
@@ -832,10 +847,7 @@ async function createArtifact(token, data) {
 async function updateArtifact(token, artifactId, data) {
     const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify(data)
     });
     
@@ -849,9 +861,7 @@ async function updateArtifact(token, artifactId, data) {
 async function deleteArtifact(token, artifactId) {
     const response = await fetch(`${SERVER_URL}/v1/artifacts/${artifactId}`, {
         method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -873,9 +883,7 @@ async function kvList(token, params = {}) {
         : `${SERVER_URL}/v1/kv`;
     
     const response = await fetch(url, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -887,9 +895,7 @@ async function kvList(token, params = {}) {
 
 async function kvGet(token, key) {
     const response = await fetch(`${SERVER_URL}/v1/kv/${encodeURIComponent(key)}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (response.status === 404) {
@@ -906,10 +912,7 @@ async function kvGet(token, key) {
 async function kvMutate(token, mutations) {
     const response = await fetch(`${SERVER_URL}/v1/kv`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify({ mutations })
     });
     
@@ -926,9 +929,7 @@ async function kvMutate(token, mutations) {
 
 async function fetchFriends(token) {
     const response = await fetch(`${SERVER_URL}/v1/friends`, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -940,9 +941,7 @@ async function fetchFriends(token) {
 
 async function searchUsers(token, query) {
     const response = await fetch(`${SERVER_URL}/v1/user/search?${new URLSearchParams({ query })}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -957,9 +956,7 @@ async function searchUsers(token, query) {
 
 async function fetchUser(token, userId) {
     const response = await fetch(`${SERVER_URL}/v1/user/${userId}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (response.status === 404) {
@@ -976,10 +973,7 @@ async function fetchUser(token, userId) {
 async function addFriend(token, userId) {
     const response = await fetch(`${SERVER_URL}/v1/friends/add`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify({ uid: userId })
     });
     
@@ -993,10 +987,7 @@ async function addFriend(token, userId) {
 async function removeFriend(token, userId) {
     const response = await fetch(`${SERVER_URL}/v1/friends/remove`, {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
+        headers: getCommonHeaders(token),
         body: JSON.stringify({ uid: userId })
     });
     
@@ -1020,9 +1011,7 @@ async function fetchFeed(token, options = {}) {
     const url = `${SERVER_URL}/v1/feed${params.toString() ? `?${params}` : ''}`;
     
     const response = await fetch(url, {
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -1039,9 +1028,7 @@ async function fetchFeed(token, options = {}) {
 async function deleteSession(token, sessionId) {
     const response = await fetch(`${SERVER_URL}/v1/sessions/${sessionId}`, {
         method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -1058,9 +1045,7 @@ async function deleteSession(token, sessionId) {
 async function disconnectService(token, service) {
     const response = await fetch(`${SERVER_URL}/v1/connect/${service}`, {
         method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        }
+        headers: getCommonHeaders(token)
     });
     
     if (!response.ok) {
@@ -1229,9 +1214,16 @@ function handleChatModeUpdate(data) {
 async function connectWebSocket(token) {
     const { io } = require('socket.io-client');
     
+    // 构建 extraHeaders（包含 API Key）
+    const extraHeaders = {};
+    if (API_KEY) {
+        extraHeaders['X-API-Key'] = API_KEY;
+    }
+    
     return new Promise((resolve, reject) => {
         socket = io(SERVER_URL, {
             path: '/v1/updates',
+            extraHeaders,
             auth: {
                 token: token,
                 clientType: 'user-scoped'
@@ -2644,8 +2636,9 @@ async function processCommand(input, rl) {
 // ============================================================================
 
 async function main() {
-    console.log('\n🚀 Happy Coder 客户端 v2.0.0');
+    console.log('\n🚀 Happy Coder 客户端 v2.1.0');
     console.log(`📡 服务器: ${SERVER_URL}`);
+    console.log(`🔑 API Key: ${API_KEY ? '✓ 已配置' : '✗ 未配置'}`);
     console.log(`🔐 权限模式: ${currentPermissionMode}`);
     console.log('');
 
