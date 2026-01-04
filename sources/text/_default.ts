@@ -49,6 +49,8 @@ export const en = {
         version: 'Version',
         copied: 'Copied',
         copy: 'Copy',
+        show: 'Show',
+        hide: 'Hide',
         scanning: 'Scanning...',
         urlPlaceholder: 'https://example.com',
         home: 'Home',
@@ -309,6 +311,9 @@ export const en = {
         failedToConnectToServer: 'Failed to connect to server',
         currentlyUsingCustomServer: 'Currently using custom server',
         customServerUrlLabel: 'Custom Server URL',
+        apiKeyLabel: 'API Key',
+        apiKeyPlaceholder: 'Enter API key (optional)',
+        apiKeyFooter: 'Required if the server has API key protection enabled',
         advancedFeatureFooter: "This is an advanced feature. Only change the server if you know what you're doing. You will need to log out and log in again after changing servers."
     },
 

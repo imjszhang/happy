@@ -2,7 +2,7 @@ import { getRandomBytes } from 'expo-crypto';
 import sodium from '@/encryption/libsodium.lib';
 import axios from 'axios';
 import { encodeBase64 } from '../encryption/base64';
-import { getServerUrl } from '@/sync/serverConfig';
+import { getServerUrl, getApiKey } from '@/sync/serverConfig';
 
 export interface QRAuthKeyPair {
     publicKey: Uint8Array;
@@ -24,9 +24,15 @@ export async function authQRStart(keypair: QRAuthKeyPair): Promise<boolean> {
         console.log(`[AUTH DEBUG] Sending auth request to: ${serverUrl}/v1/auth/account/request`);
         console.log(`[AUTH DEBUG] Public key: ${encodeBase64(keypair.publicKey).substring(0, 20)}...`);
 
+        const headers: Record<string, string> = {};
+        const apiKey = getApiKey();
+        if (apiKey) {
+            headers['X-API-Key'] = apiKey;
+        }
+
         await axios.post(`${serverUrl}/v1/auth/account/request`, {
             publicKey: encodeBase64(keypair.publicKey),
-        });
+        }, { headers });
 
         console.log('[AUTH DEBUG] Auth request sent successfully');
         return true;

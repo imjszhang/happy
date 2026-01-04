@@ -1,6 +1,8 @@
 import { io, Socket } from 'socket.io-client';
 import { TokenStorage } from '@/auth/tokenStorage';
 import { Encryption } from './encryption/encryption';
+import { getApiKey } from './serverConfig';
+import { getCommonHeaders } from './apiClient';
 
 //
 // Types
@@ -55,8 +57,16 @@ class ApiSocket {
 
         this.updateStatus('connecting');
 
+        // Build extraHeaders with API Key if configured
+        const extraHeaders: Record<string, string> = {};
+        const apiKey = getApiKey();
+        if (apiKey) {
+            extraHeaders['X-API-Key'] = apiKey;
+        }
+
         this.socket = io(this.config.endpoint, {
             path: '/v1/updates',
+            extraHeaders,
             auth: {
                 token: this.config.token,
                 clientType: 'user-scoped' as const
@@ -175,8 +185,9 @@ class ApiSocket {
         }
 
         const url = `${this.config.endpoint}${path}`;
+        const commonHeaders = await getCommonHeaders(true);
         const headers = {
-            'Authorization': `Bearer ${credentials.token}`,
+            ...commonHeaders,
             ...options?.headers
         };
 

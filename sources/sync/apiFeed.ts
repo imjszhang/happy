@@ -1,6 +1,7 @@
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 import { FeedResponse, FeedResponseSchema, FeedItem } from './feedTypes';
 import { log } from '@/log';
 
@@ -23,14 +24,11 @@ export async function fetchFeed(
         if (options?.before) params.set('before', options.before);
         if (options?.after) params.set('after', options.after);
         
-        const url = `${API_ENDPOINT}/v1/feed${params.toString() ? `?${params}` : ''}`;
-        log.log(`📰 Fetching feed: ${url}`);
+        const path = `/v1/feed${params.toString() ? `?${params}` : ''}`;
+        log.log(`📰 Fetching feed: ${API_ENDPOINT}${path}`);
         
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`
-            }
+        const response = await apiRequestWithCredentials(path, credentials, {
+            method: 'GET'
         });
 
         if (!response.ok) {

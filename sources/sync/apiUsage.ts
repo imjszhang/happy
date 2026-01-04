@@ -1,6 +1,6 @@
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
-import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 
 export interface UsageDataPoint {
     timestamp: number;
@@ -27,13 +27,10 @@ export async function queryUsage(
     credentials: AuthCredentials,
     params: UsageQueryParams = {}
 ): Promise<UsageResponse> {
-    const API_ENDPOINT = getServerUrl();
-    
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/usage/query`, {
+        const response = await apiRequestWithCredentials('/v1/usage/query', credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(params)

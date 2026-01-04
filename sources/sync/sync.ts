@@ -23,6 +23,7 @@ import { parseToken } from '@/utils/parseToken';
 import { RevenueCat, LogLevel, PaywallResult } from './revenueCat';
 import { trackPaywallPresented, trackPaywallPurchased, trackPaywallCancelled, trackPaywallRestored, trackPaywallError } from '@/track';
 import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 import { config } from '@/config';
 import { log } from '@/log';
 import { gitStatusSync } from './gitStatusSync';
@@ -485,10 +486,8 @@ class Sync {
     private fetchSessions = async () => {
         if (!this.credentials) return;
 
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/sessions`, {
+        const response = await apiRequestWithCredentials('/v1/sessions', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -859,10 +858,8 @@ class Sync {
         if (!this.credentials) return;
 
         console.log('📊 Sync: Fetching machines...');
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/machines`, {
+        const response = await apiRequestWithCredentials('/v1/machines', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -1159,14 +1156,13 @@ class Sync {
             while (true) {
                 let version = storage.getState().settingsVersion;
                 let settings = applySettings(storage.getState().settings, this.pendingSettings);
-                const response = await fetch(`${API_ENDPOINT}/v1/account/settings`, {
+                const response = await apiRequestWithCredentials('/v1/account/settings', this.credentials, {
                     method: 'POST',
                     body: JSON.stringify({
                         settings: await this.encryption.encryptRaw(settings),
                         expectedVersion: version ?? 0
                     }),
                     headers: {
-                        'Authorization': `Bearer ${this.credentials.token}`,
                         'Content-Type': 'application/json'
                     }
                 });
@@ -1221,9 +1217,8 @@ class Sync {
         }
 
         // Run request
-        const response = await fetch(`${API_ENDPOINT}/v1/account/settings`, {
+        const response = await apiRequestWithCredentials('/v1/account/settings', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -1265,10 +1260,8 @@ class Sync {
     private fetchProfile = async () => {
         if (!this.credentials) return;
 
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/account/profile`, {
+        const response = await apiRequestWithCredentials('/v1/account/profile', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });

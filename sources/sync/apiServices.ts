@@ -1,6 +1,6 @@
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
-import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 
 /**
  * Connect a service to the user's account
@@ -10,13 +10,10 @@ export async function connectService(
     service: string,
     token: any
 ): Promise<void> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/${service}/register`, {
+        const response = await apiRequestWithCredentials(`/v1/connect/${service}/register`, credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ token: JSON.stringify(token) })
@@ -37,14 +34,9 @@ export async function connectService(
  * Disconnect a connected service from the user's account
  */
 export async function disconnectService(credentials: AuthCredentials, service: string): Promise<void> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/${service}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`
-            }
+        const response = await apiRequestWithCredentials(`/v1/connect/${service}`, credentials, {
+            method: 'DELETE'
         });
 
         if (!response.ok) {

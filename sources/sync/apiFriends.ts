@@ -1,6 +1,7 @@
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 import {
     UserProfile,
     UserResponse,
@@ -18,17 +19,11 @@ export async function searchUsersByUsername(
     credentials: AuthCredentials,
     username: string
 ): Promise<UserProfile[]> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(
-            `${API_ENDPOINT}/v1/user/search?${new URLSearchParams({ query: username })}`,
-            {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${credentials.token}`
-                }
-            }
+        const response = await apiRequestWithCredentials(
+            `/v1/user/search?${new URLSearchParams({ query: username })}`,
+            credentials,
+            { method: 'GET' }
         );
 
         if (!response.ok) {
@@ -56,17 +51,11 @@ export async function getUserProfile(
     credentials: AuthCredentials,
     userId: string
 ): Promise<UserProfile | null> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(
-            `${API_ENDPOINT}/v1/user/${userId}`,
-            {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${credentials.token}`
-                }
-            }
+        const response = await apiRequestWithCredentials(
+            `/v1/user/${userId}`,
+            credentials,
+            { method: 'GET' }
         );
 
         if (!response.ok) {
@@ -111,13 +100,10 @@ export async function sendFriendRequest(
     credentials: AuthCredentials,
     recipientId: string
 ): Promise<UserProfile | null> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends/add`, {
+        const response = await apiRequestWithCredentials('/v1/friends/add', credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ uid: recipientId })
@@ -153,14 +139,9 @@ export async function sendFriendRequest(
 export async function getFriendsList(
     credentials: AuthCredentials
 ): Promise<UserProfile[]> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`
-            }
+        const response = await apiRequestWithCredentials('/v1/friends', credentials, {
+            method: 'GET'
         });
 
         if (!response.ok) {
@@ -185,13 +166,10 @@ export async function removeFriend(
     credentials: AuthCredentials,
     friendId: string
 ): Promise<UserProfile | null> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends/remove`, {
+        const response = await apiRequestWithCredentials('/v1/friends/remove', credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ uid: friendId })
