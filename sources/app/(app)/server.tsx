@@ -9,7 +9,7 @@ import { RoundButton } from '@/components/RoundButton';
 import { Modal } from '@/modal';
 import { layout } from '@/components/layout';
 import { t } from '@/text';
-import { getServerUrl, setServerUrl, validateServerUrl, getServerInfo } from '@/sync/serverConfig';
+import { getServerUrl, setServerUrl, validateServerUrl, getServerInfo, getApiKey, setApiKey, isUsingCustomApiKey } from '@/sync/serverConfig';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -81,8 +81,10 @@ export default function ServerConfigScreen() {
     const router = useRouter();
     const serverInfo = getServerInfo();
     const [inputUrl, setInputUrl] = useState(serverInfo.isCustom ? getServerUrl() : '');
+    const [inputApiKey, setInputApiKey] = useState(isUsingCustomApiKey() ? (getApiKey() || '') : '');
     const [error, setError] = useState<string | null>(null);
     const [isValidating, setIsValidating] = useState(false);
+    const [showApiKey, setShowApiKey] = useState(false);
 
     const validateServer = async (url: string): Promise<boolean> => {
         try {
@@ -142,6 +144,10 @@ export default function ServerConfigScreen() {
 
         if (confirmed) {
             setServerUrl(inputUrl);
+            // Save API key if provided
+            if (inputApiKey.trim()) {
+                setApiKey(inputApiKey.trim());
+            }
         }
     };
 
@@ -154,7 +160,9 @@ export default function ServerConfigScreen() {
 
         if (confirmed) {
             setServerUrl(null);
+            setApiKey(null);
             setInputUrl('');
+            setInputApiKey('');
         }
     };
 
@@ -203,6 +211,36 @@ export default function ServerConfigScreen() {
                                     {t('server.validatingServer')}
                                 </Text>
                             )}
+                            
+                            <Text style={[styles.labelText, { marginTop: 16 }]}>{t('server.apiKeyLabel').toUpperCase()}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <TextInput
+                                    style={[
+                                        styles.textInput,
+                                        { flex: 1, marginRight: 8 }
+                                    ]}
+                                    value={inputApiKey}
+                                    onChangeText={(text) => {
+                                        setInputApiKey(text);
+                                    }}
+                                    placeholder={t('server.apiKeyPlaceholder')}
+                                    placeholderTextColor={theme.colors.input.placeholder}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    secureTextEntry={!showApiKey}
+                                    editable={!isValidating}
+                                />
+                                <RoundButton
+                                    title={showApiKey ? t('common.hide') : t('common.show')}
+                                    size="small"
+                                    display="inverted"
+                                    onPress={() => setShowApiKey(!showApiKey)}
+                                />
+                            </View>
+                            <Text style={[styles.statusText, { marginBottom: 16 }]}>
+                                {t('server.apiKeyFooter')}
+                            </Text>
+                            
                             <View style={styles.buttonRow}>
                                 <View style={styles.buttonWrapper}>
                                     <RoundButton

@@ -23,6 +23,7 @@ import { parseToken } from '@/utils/parseToken';
 import { RevenueCat, LogLevel, PaywallResult } from './revenueCat';
 import { trackPaywallPresented, trackPaywallPurchased, trackPaywallCancelled, trackPaywallRestored, trackPaywallError } from '@/track';
 import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 import { config } from '@/config';
 import { log } from '@/log';
 import { gitStatusSync } from './gitStatusSync';
@@ -34,10 +35,6 @@ import { systemPrompt } from './prompt/systemPrompt';
 import { fetchArtifact, fetchArtifacts, createArtifact, updateArtifact } from './apiArtifacts';
 import { DecryptedArtifact, Artifact, ArtifactCreateRequest, ArtifactUpdateRequest } from './artifactTypes';
 import { ArtifactEncryption } from './encryption/artifactEncryption';
-import { getFriendsList, getUserProfile } from './apiFriends';
-import { fetchFeed } from './apiFeed';
-import { FeedItem } from './feedTypes';
-import { UserProfile } from './friendTypes';
 import { initializeTodoSync } from '../-zen/model/ops';
 
 class Sync {
@@ -62,9 +59,6 @@ class Sync {
     private pushTokenSync: InvalidateSync;
     private nativeUpdateSync: InvalidateSync;
     private artifactsSync: InvalidateSync;
-    private friendsSync: InvalidateSync;
-    private friendRequestsSync: InvalidateSync;
-    private feedSync: InvalidateSync;
     private todosSync: InvalidateSync;
     private activityAccumulator: ActivityUpdateAccumulator;
     private pendingSettings: Partial<Settings> = loadPendingSettings();
@@ -82,9 +76,6 @@ class Sync {
         this.machinesSync = new InvalidateSync(this.fetchMachines);
         this.nativeUpdateSync = new InvalidateSync(this.fetchNativeUpdate);
         this.artifactsSync = new InvalidateSync(this.fetchArtifactsList);
-        this.friendsSync = new InvalidateSync(this.fetchFriends);
-        this.friendRequestsSync = new InvalidateSync(this.fetchFriendRequests);
-        this.feedSync = new InvalidateSync(this.fetchFeed);
         this.todosSync = new InvalidateSync(this.fetchTodos);
 
         const registerPushToken = async () => {
@@ -108,9 +99,6 @@ class Sync {
                 this.nativeUpdateSync.invalidate();
                 log.log('📱 App became active: Invalidating artifacts sync');
                 this.artifactsSync.invalidate();
-                this.friendsSync.invalidate();
-                this.friendRequestsSync.invalidate();
-                this.feedSync.invalidate();
                 this.todosSync.invalidate();
             } else {
                 log.log(`📱 App state changed to: ${nextAppState}`);
@@ -142,6 +130,9 @@ class Sync {
         this.anonID = encryption.anonID;
         this.serverID = parseToken(credentials.token);
         await this.#init();
+
+        // Await purchases sync so RevenueCat is initialized for paywall
+        await this.purchasesSync.awaitQueue();
     }
 
     async #init() {
@@ -168,10 +159,7 @@ class Sync {
         this.machinesSync.invalidate();
         this.pushTokenSync.invalidate();
         this.nativeUpdateSync.invalidate();
-        this.friendsSync.invalidate();
-        this.friendRequestsSync.invalidate();
         this.artifactsSync.invalidate();
-        this.feedSync.invalidate();
         this.todosSync.invalidate();
         log.log('🔄 #init: All syncs invalidated, including artifacts and todos');
 
@@ -246,33 +234,9 @@ class Sync {
             sentFrom = 'web'; // fallback
         }
 
-        // Resolve model settings based on modelMode
-        let model: string | null = null;
-        let fallbackModel: string | null = null;
-
-        switch (modelMode) {
-            case 'default':
-                model = null;
-                fallbackModel = null;
-                break;
-            case 'adaptiveUsage':
-                model = 'claude-opus-4-1-20250805';
-                fallbackModel = 'claude-sonnet-4-5-20250929';
-                break;
-            case 'sonnet':
-                model = 'claude-sonnet-4-5-20250929';
-                fallbackModel = null;
-                break;
-            case 'opus':
-                model = 'claude-opus-4-1-20250805';
-                fallbackModel = null;
-                break;
-            default:
-                // If no modelMode is specified, use default behavior (let server decide)
-                model = null;
-                fallbackModel = null;
-                break;
-        }
+        // Model settings - models are configured in CLI settings
+        const model: string | null = null;
+        const fallbackModel: string | null = null;
 
         // Create user message content with metadata
         const content: RawRecord = {
@@ -444,40 +408,6 @@ class Sync {
         }
     }
 
-    async assumeUsers(userIds: string[]): Promise<void> {
-        if (!this.credentials || userIds.length === 0) return;
-        
-        const state = storage.getState();
-        // Filter out users we already have in cache (including null for 404s)
-        const missingIds = userIds.filter(id => !(id in state.users));
-        
-        if (missingIds.length === 0) return;
-        
-        log.log(`👤 Fetching ${missingIds.length} missing users...`);
-        
-        // Fetch missing users in parallel
-        const results = await Promise.all(
-            missingIds.map(async (id) => {
-                try {
-                    const profile = await getUserProfile(this.credentials!, id);
-                    return { id, profile };  // profile is null if 404
-                } catch (error) {
-                    console.error(`Failed to fetch user ${id}:`, error);
-                    return { id, profile: null };  // Treat errors as 404
-                }
-            })
-        );
-        
-        // Convert to Record<string, UserProfile | null>
-        const usersMap: Record<string, UserProfile | null> = {};
-        results.forEach(({ id, profile }) => {
-            usersMap[id] = profile;
-        });
-        
-        storage.getState().applyUsers(usersMap);
-        log.log(`👤 Applied ${results.length} users to cache (${results.filter(r => r.profile).length} found, ${results.filter(r => !r.profile).length} not found)`);
-    }
-
     //
     // Private
     //
@@ -485,10 +415,8 @@ class Sync {
     private fetchSessions = async () => {
         if (!this.credentials) return;
 
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/sessions`, {
+        const response = await apiRequestWithCredentials('/v1/sessions', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -859,10 +787,8 @@ class Sync {
         if (!this.credentials) return;
 
         console.log('📊 Sync: Fetching machines...');
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/machines`, {
+        const response = await apiRequestWithCredentials('/v1/machines', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -964,26 +890,6 @@ class Sync {
         log.log(`🖥️ fetchMachines completed - processed ${decryptedMachines.length} machines`);
     }
 
-    private fetchFriends = async () => {
-        if (!this.credentials) return;
-        
-        try {
-            log.log('👥 Fetching friends list...');
-            const friendsList = await getFriendsList(this.credentials);
-            storage.getState().applyFriends(friendsList);
-            log.log(`👥 fetchFriends completed - processed ${friendsList.length} friends`);
-        } catch (error) {
-            console.error('Failed to fetch friends:', error);
-            // Silently handle error - UI will show appropriate state
-        }
-    }
-
-    private fetchFriendRequests = async () => {
-        // Friend requests are now included in the friends list with status='pending'
-        // This method is kept for backward compatibility but does nothing
-        log.log('👥 fetchFriendRequests called - now handled by fetchFriends');
-    }
-
     private fetchTodos = async () => {
         if (!this.credentials) return;
 
@@ -1065,90 +971,6 @@ class Sync {
         log.log('📝 Applied todo socket updates successfully');
     }
 
-    private fetchFeed = async () => {
-        if (!this.credentials) return;
-
-        try {
-            log.log('📰 Fetching feed...');
-            const state = storage.getState();
-            const existingItems = state.feedItems;
-            const head = state.feedHead;
-            
-            // Load feed items - if we have a head, load newer items
-            let allItems: FeedItem[] = [];
-            let hasMore = true;
-            let cursor = head ? { after: head } : undefined;
-            let loadedCount = 0;
-            const maxItems = 500;
-            
-            // Keep loading until we reach known items or hit max limit
-            while (hasMore && loadedCount < maxItems) {
-                const response = await fetchFeed(this.credentials, {
-                    limit: 100,
-                    ...cursor
-                });
-                
-                // Check if we reached known items
-                const foundKnown = response.items.some(item => 
-                    existingItems.some(existing => existing.id === item.id)
-                );
-                
-                allItems.push(...response.items);
-                loadedCount += response.items.length;
-                hasMore = response.hasMore && !foundKnown;
-                
-                // Update cursor for next page
-                if (response.items.length > 0) {
-                    const lastItem = response.items[response.items.length - 1];
-                    cursor = { after: lastItem.cursor };
-                }
-            }
-            
-            // If this is initial load (no head), also load older items
-            if (!head && allItems.length < 100) {
-                const response = await fetchFeed(this.credentials, {
-                    limit: 100
-                });
-                allItems.push(...response.items);
-            }
-            
-            // Collect user IDs from friend-related feed items
-            const userIds = new Set<string>();
-            allItems.forEach(item => {
-                if (item.body && (item.body.kind === 'friend_request' || item.body.kind === 'friend_accepted')) {
-                    userIds.add(item.body.uid);
-                }
-            });
-            
-            // Fetch missing users
-            if (userIds.size > 0) {
-                await this.assumeUsers(Array.from(userIds));
-            }
-            
-            // Filter out items where user is not found (404)
-            const users = storage.getState().users;
-            const compatibleItems = allItems.filter(item => {
-                // Keep text items
-                if (item.body.kind === 'text') return true;
-                
-                // For friend-related items, check if user exists and is not null (404)
-                if (item.body.kind === 'friend_request' || item.body.kind === 'friend_accepted') {
-                    const userProfile = users[item.body.uid];
-                    // Keep item only if user exists and is not null
-                    return userProfile !== null && userProfile !== undefined;
-                }
-                
-                return true;
-            });
-            
-            // Apply only compatible items to storage
-            storage.getState().applyFeedItems(compatibleItems);
-            log.log(`📰 fetchFeed completed - loaded ${compatibleItems.length} compatible items (${allItems.length - compatibleItems.length} filtered)`);
-        } catch (error) {
-            console.error('Failed to fetch feed:', error);
-        }
-    }
-
     private syncSettings = async () => {
         if (!this.credentials) return;
 
@@ -1159,14 +981,13 @@ class Sync {
             while (true) {
                 let version = storage.getState().settingsVersion;
                 let settings = applySettings(storage.getState().settings, this.pendingSettings);
-                const response = await fetch(`${API_ENDPOINT}/v1/account/settings`, {
+                const response = await apiRequestWithCredentials('/v1/account/settings', this.credentials, {
                     method: 'POST',
                     body: JSON.stringify({
                         settings: await this.encryption.encryptRaw(settings),
                         expectedVersion: version ?? 0
                     }),
                     headers: {
-                        'Authorization': `Bearer ${this.credentials.token}`,
                         'Content-Type': 'application/json'
                     }
                 });
@@ -1221,9 +1042,8 @@ class Sync {
         }
 
         // Run request
-        const response = await fetch(`${API_ENDPOINT}/v1/account/settings`, {
+        const response = await apiRequestWithCredentials('/v1/account/settings', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -1265,10 +1085,8 @@ class Sync {
     private fetchProfile = async () => {
         if (!this.credentials) return;
 
-        const API_ENDPOINT = getServerUrl();
-        const response = await fetch(`${API_ENDPOINT}/v1/account/profile`, {
+        const response = await apiRequestWithCredentials('/v1/account/profile', this.credentials, {
             headers: {
-                'Authorization': `Bearer ${this.credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -1510,9 +1328,6 @@ class Sync {
             this.machinesSync.invalidate();
             log.log('🔌 Socket reconnected: Invalidating artifacts sync');
             this.artifactsSync.invalidate();
-            this.friendsSync.invalidate();
-            this.friendRequestsSync.invalidate();
-            this.feedSync.invalidate();
             const sessionsData = storage.getState().sessionsData;
             if (sessionsData) {
                 for (const item of sessionsData) {
@@ -1726,25 +1541,6 @@ class Sync {
 
             // Update storage using applyMachines which rebuilds sessionListViewData
             storage.getState().applyMachines([updatedMachine]);
-        } else if (updateData.body.t === 'relationship-updated') {
-            log.log('👥 Received relationship-updated update');
-            const relationshipUpdate = updateData.body;
-            
-            // Apply the relationship update to storage
-            storage.getState().applyRelationshipUpdate({
-                fromUserId: relationshipUpdate.fromUserId,
-                toUserId: relationshipUpdate.toUserId,
-                status: relationshipUpdate.status,
-                action: relationshipUpdate.action,
-                fromUser: relationshipUpdate.fromUser,
-                toUser: relationshipUpdate.toUser,
-                timestamp: relationshipUpdate.timestamp
-            });
-            
-            // Invalidate friends data to refresh with latest changes
-            this.friendsSync.invalidate();
-            this.friendRequestsSync.invalidate();
-            this.feedSync.invalidate();
         } else if (updateData.body.t === 'new-artifact') {
             log.log('📦 Received new-artifact update');
             const artifactUpdate = updateData.body;
@@ -1856,36 +1652,6 @@ class Sync {
             
             // Remove encryption key from memory
             this.artifactDataKeys.delete(artifactId);
-        } else if (updateData.body.t === 'new-feed-post') {
-            log.log('📰 Received new-feed-post update');
-            const feedUpdate = updateData.body;
-            
-            // Convert to FeedItem with counter from cursor
-            const feedItem: FeedItem = {
-                id: feedUpdate.id,
-                body: feedUpdate.body,
-                cursor: feedUpdate.cursor,
-                createdAt: feedUpdate.createdAt,
-                repeatKey: feedUpdate.repeatKey,
-                counter: parseInt(feedUpdate.cursor.substring(2), 10)
-            };
-            
-            // Check if we need to fetch user for friend-related items
-            if (feedItem.body && (feedItem.body.kind === 'friend_request' || feedItem.body.kind === 'friend_accepted')) {
-                await this.assumeUsers([feedItem.body.uid]);
-                
-                // Check if user fetch failed (404) - don't store item if user not found
-                const users = storage.getState().users;
-                const userProfile = users[feedItem.body.uid];
-                if (userProfile === null || userProfile === undefined) {
-                    // User was not found or 404, don't store this item
-                    log.log(`📰 Skipping feed item ${feedItem.id} - user ${feedItem.body.uid} not found`);
-                    return;
-                }
-            }
-            
-            // Apply to storage (will handle repeatKey replacement)
-            storage.getState().applyFeedItems([feedItem]);
         } else if (updateData.body.t === 'kv-batch-update') {
             log.log('📝 Received kv-batch-update');
             const kvUpdate = updateData.body;

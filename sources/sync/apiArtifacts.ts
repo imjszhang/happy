@@ -1,18 +1,15 @@
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
-import { getServerUrl } from './serverConfig';
+import { apiRequestWithCredentials } from './apiClient';
 import { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, ArtifactUpdateResponse } from './artifactTypes';
 
 /**
  * Fetch all artifacts for the account
  */
 export async function fetchArtifacts(credentials: AuthCredentials): Promise<Artifact[]> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/artifacts`, {
+        const response = await apiRequestWithCredentials('/v1/artifacts', credentials, {
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -30,12 +27,9 @@ export async function fetchArtifacts(credentials: AuthCredentials): Promise<Arti
  * Fetch a single artifact with full body
  */
 export async function fetchArtifact(credentials: AuthCredentials, artifactId: string): Promise<Artifact> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/artifacts/${artifactId}`, {
+        const response = await apiRequestWithCredentials(`/v1/artifacts/${artifactId}`, credentials, {
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -59,13 +53,10 @@ export async function createArtifact(
     credentials: AuthCredentials, 
     request: ArtifactCreateRequest
 ): Promise<Artifact> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/artifacts`, {
+        const response = await apiRequestWithCredentials('/v1/artifacts', credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(request)
@@ -91,13 +82,10 @@ export async function updateArtifact(
     artifactId: string,
     request: ArtifactUpdateRequest
 ): Promise<ArtifactUpdateResponse> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/artifacts/${artifactId}`, {
+        const response = await apiRequestWithCredentials(`/v1/artifacts/${artifactId}`, credentials, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${credentials.token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(request)
@@ -122,14 +110,9 @@ export async function deleteArtifact(
     credentials: AuthCredentials,
     artifactId: string
 ): Promise<void> {
-    const API_ENDPOINT = getServerUrl();
-
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/artifacts/${artifactId}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`
-            }
+        const response = await apiRequestWithCredentials(`/v1/artifacts/${artifactId}`, credentials, {
+            method: 'DELETE'
         });
 
         if (!response.ok) {

@@ -1,20 +1,23 @@
 import * as React from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Text, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useRealtimeStatus, useFriendRequests } from '@/sync/storage';
+import { useSocketStatus, useRealtimeStatus } from '@/sync/storage';
 import { useVisibleSessionListViewData } from '@/hooks/useVisibleSessionListViewData';
 import { useIsTablet } from '@/utils/responsive';
 import { useRouter } from 'expo-router';
 import { EmptySessionsTablet } from './EmptySessionsTablet';
 import { SessionsList } from './SessionsList';
-import { FABWide } from './FABWide';
-import { VoiceAssistantStatusBar } from './VoiceAssistantStatusBar';
 import { TabBar, TabType } from './TabBar';
-import { InboxView } from './InboxView';
 import { SettingsViewWrapper } from './SettingsViewWrapper';
 import { SessionsListWrapper } from './SessionsListWrapper';
-import { useSettings } from '@/sync/storage';
-import { ZenHome } from '@/-zen/ZenHome';
+import { Header } from './navigation/Header';
+import { HeaderLogo } from './HeaderLogo';
+import { VoiceAssistantStatusBar } from './VoiceAssistantStatusBar';
+import { StatusDot } from './StatusDot';
+import { Ionicons } from '@expo/vector-icons';
+import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+import { isUsingCustomServer } from '@/sync/serverConfig';
 
 interface MainViewProps {
     variant: 'phone' | 'sidebar';
@@ -63,27 +66,152 @@ const styles = StyleSheet.create((theme) => ({
         flexBasis: 0,
         flexGrow: 1,
     },
+    titleContainer: {
+        flex: 1,
+        alignItems: 'center',
+    },
+    titleText: {
+        fontSize: 17,
+        color: theme.colors.header.tint,
+        fontWeight: '600',
+        ...Typography.default('semiBold'),
+    },
+    statusContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: -2,
+    },
+    statusText: {
+        fontSize: 12,
+        fontWeight: '500',
+        lineHeight: 16,
+        ...Typography.default(),
+    },
+    headerButton: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 }));
 
+// Tab header configuration
+const TAB_TITLES = {
+    sessions: 'tabs.sessions',
+    settings: 'tabs.settings',
+} as const;
+
+// Active tabs
+type ActiveTabType = 'sessions' | 'settings';
+
+// Header title component with connection status
+const HeaderTitle = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => {
+    const { theme } = useUnistyles();
+    const socketStatus = useSocketStatus();
+
+    const connectionStatus = React.useMemo(() => {
+        const { status } = socketStatus;
+        switch (status) {
+            case 'connected':
+                return {
+                    color: theme.colors.status.connected,
+                    isPulsing: false,
+                    text: t('status.connected'),
+                };
+            case 'connecting':
+                return {
+                    color: theme.colors.status.connecting,
+                    isPulsing: true,
+                    text: t('status.connecting'),
+                };
+            case 'disconnected':
+                return {
+                    color: theme.colors.status.disconnected,
+                    isPulsing: false,
+                    text: t('status.disconnected'),
+                };
+            case 'error':
+                return {
+                    color: theme.colors.status.error,
+                    isPulsing: false,
+                    text: t('status.error'),
+                };
+            default:
+                return {
+                    color: theme.colors.status.default,
+                    isPulsing: false,
+                    text: '',
+                };
+        }
+    }, [socketStatus, theme]);
+
+    return (
+        <View style={styles.titleContainer}>
+            <Text style={styles.titleText}>
+                {t(TAB_TITLES[activeTab])}
+            </Text>
+            {connectionStatus.text && (
+                <View style={styles.statusContainer}>
+                    <StatusDot
+                        color={connectionStatus.color}
+                        isPulsing={connectionStatus.isPulsing}
+                        size={6}
+                        style={{ marginRight: 4 }}
+                    />
+                    <Text style={[styles.statusText, { color: connectionStatus.color }]}>
+                        {connectionStatus.text}
+                    </Text>
+                </View>
+            )}
+        </View>
+    );
+});
+
+// Header right button - varies by tab
+const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => {
+    const router = useRouter();
+    const { theme } = useUnistyles();
+    const isCustomServer = isUsingCustomServer();
+
+    if (activeTab === 'sessions') {
+        return (
+            <Pressable
+                onPress={() => router.push('/new')}
+                hitSlop={15}
+                style={styles.headerButton}
+            >
+                <Ionicons name="add-outline" size={28} color={theme.colors.header.tint} />
+            </Pressable>
+        );
+    }
+
+    if (activeTab === 'settings') {
+        if (!isCustomServer) {
+            // Empty view to maintain header centering
+            return <View style={styles.headerButton} />;
+        }
+        return (
+            <Pressable
+                onPress={() => router.push('/server')}
+                hitSlop={15}
+                style={styles.headerButton}
+            >
+                <Ionicons name="server-outline" size={24} color={theme.colors.header.tint} />
+            </Pressable>
+        );
+    }
+
+    return null;
+});
 
 export const MainView = React.memo(({ variant }: MainViewProps) => {
     const { theme } = useUnistyles();
     const sessionListViewData = useVisibleSessionListViewData();
     const isTablet = useIsTablet();
     const realtimeStatus = useRealtimeStatus();
-    const router = useRouter();
-    const friendRequests = useFriendRequests();
-    const settings = useSettings();
 
-    // Tab state management - always call hooks even if not used
-    // Default to zen tab if experiments enabled, otherwise sessions
-    const [activeTab, setActiveTab] = React.useState<TabType>(
-        settings.experiments ? 'zen' : 'sessions'
-    );
-
-    const handleNewSession = React.useCallback(() => {
-        router.push('/new');
-    }, [router]);
+    // Tab state management
+    const [activeTab, setActiveTab] = React.useState<TabType>('sessions');
 
     const handleTabPress = React.useCallback((tab: TabType) => {
         setActiveTab(tab);
@@ -92,10 +220,6 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
     // Regular phone mode with tabs - define this before any conditional returns
     const renderTabContent = React.useCallback(() => {
         switch (activeTab) {
-            case 'zen':
-                return <ZenHome />;
-            case 'inbox':
-                return <InboxView />;
             case 'settings':
                 return <SettingsViewWrapper />;
             case 'sessions':
@@ -147,16 +271,24 @@ export const MainView = React.memo(({ variant }: MainViewProps) => {
     // Regular phone mode with tabs
     return (
         <>
-            {realtimeStatus !== 'disconnected' && (
-                <VoiceAssistantStatusBar variant="full" />
-            )}
             <View style={styles.phoneContainer}>
+                <View style={{ backgroundColor: theme.colors.groupped.background }}>
+                    <Header
+                        title={<HeaderTitle activeTab={activeTab as ActiveTabType} />}
+                        headerRight={() => <HeaderRight activeTab={activeTab as ActiveTabType} />}
+                        headerLeft={() => <HeaderLogo />}
+                        headerShadowVisible={false}
+                        headerTransparent={true}
+                    />
+                    {realtimeStatus !== 'disconnected' && (
+                        <VoiceAssistantStatusBar variant="full" />
+                    )}
+                </View>
                 {renderTabContent()}
             </View>
             <TabBar
                 activeTab={activeTab}
                 onTabPress={handleTabPress}
-                inboxBadgeCount={friendRequests.length}
             />
         </>
     );

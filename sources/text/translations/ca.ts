@@ -17,16 +17,8 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 export const ca: TranslationStructure = {
     tabs: {
         // Tab navigation labels
-        inbox: 'Safata',
         sessions: 'Terminals',
         settings: 'Configuració',
-    },
-
-    inbox: {
-        // Inbox screen
-        emptyTitle: 'Safata buida',
-        emptyDescription: 'Connecta\'t amb amics per començar a compartir sessions',
-        updates: 'Actualitzacions',
     },
 
     common: {
@@ -212,6 +204,7 @@ export const ca: TranslationStructure = {
         contactSupport: 'Contacta amb el suport si el problema persisteix',
         sessionNotFound: 'Sessió no trobada',
         voiceSessionFailed: 'Ha fallat l\'inici de la sessió de veu',
+        voiceServiceUnavailable: 'El servei de veu no està disponible temporalment',
         oauthInitializationFailed: 'Ha fallat la inicialització del flux OAuth',
         tokenStorageFailed: 'Ha fallat l\'emmagatzematge dels tokens d\'autenticació',
         oauthStateMismatch: 'Ha fallat la validació de seguretat. Si us plau, torna-ho a provar',
@@ -236,12 +229,6 @@ export const ca: TranslationStructure = {
             `Ha fallat la desconnexió de ${service}`,
         connectServiceFailed: ({ service }: { service: string }) =>
             `No s'ha pogut connectar ${service}. Si us plau, torna-ho a provar.`,
-        failedToLoadFriends: 'No s\'ha pogut carregar la llista d\'amics',
-        failedToAcceptRequest: 'No s\'ha pogut acceptar la sol·licitud d\'amistat',
-        failedToRejectRequest: 'No s\'ha pogut rebutjar la sol·licitud d\'amistat',
-        failedToRemoveFriend: 'No s\'ha pogut eliminar l\'amic',
-        searchFailed: 'La cerca ha fallat. Si us plau, torna-ho a provar.',
-        failedToSendRequest: 'No s\'ha pogut enviar la sol·licitud d\'amistat',
     },
 
     newSession: {
@@ -390,13 +377,11 @@ export const ca: TranslationStructure = {
         agent: {
             claude: 'Claude',
             codex: 'Codex',
+            gemini: 'Gemini',
         },
         model: {
             title: 'MODEL',
-            default: 'Utilitza la configuració del CLI',
-            adaptiveUsage: 'Opus fins al 50% d\'ús, després Sonnet',
-            sonnet: 'Sonnet',
-            opus: 'Opus',
+            configureInCli: 'Configura els models a la configuració del CLI',
         },
         codexPermissionMode: {
             title: 'MODE DE PERMISOS CODEX',
@@ -408,15 +393,15 @@ export const ca: TranslationStructure = {
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
         },
-        codexModel: {
-            title: 'MODEL CODEX',
-            gpt5CodexLow: 'gpt-5-codex low',
-            gpt5CodexMedium: 'gpt-5-codex medium',
-            gpt5CodexHigh: 'gpt-5-codex high',
-            gpt5Minimal: 'GPT-5 Mínim',
-            gpt5Low: 'GPT-5 Baix',
-            gpt5Medium: 'GPT-5 Mitjà',
-            gpt5High: 'GPT-5 Alt',
+        geminiPermissionMode: {
+            title: 'MODE DE PERMISOS',
+            default: 'Per defecte',
+            acceptEdits: 'Accepta edicions',
+            plan: 'Mode de planificació',
+            bypassPermissions: 'Mode Yolo',
+            badgeAcceptAllEdits: 'Accepta totes les edicions',
+            badgeBypassAllPermissions: 'Omet tots els permisos',
+            badgePlanMode: 'Mode de planificació',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% restant`,
@@ -662,7 +647,6 @@ export const ca: TranslationStructure = {
         linkNewDevice: 'Enllaça un nou dispositiu', 
         restoreWithSecretKey: 'Restaura amb clau secreta',
         whatsNew: 'Novetats',
-        friends: 'Amics',
     },
 
     welcome: {
@@ -783,57 +767,6 @@ export const ca: TranslationStructure = {
         createError: 'No s\'ha pogut crear l\'artefacte. Si us plau, torna-ho a provar.',
     },
 
-    friends: {
-        // Friends feature
-        title: 'Amics',
-        manageFriends: 'Gestiona els teus amics i connexions',
-        searchTitle: 'Buscar amics',
-        pendingRequests: 'Sol·licituds d\'amistat',
-        myFriends: 'Els meus amics',
-        noFriendsYet: 'Encara no tens amics',
-        findFriends: 'Buscar amics',
-        remove: 'Eliminar',
-        pendingRequest: 'Pendent',
-        sentOn: ({ date }: { date: string }) => `Enviat el ${date}`,
-        accept: 'Acceptar',
-        reject: 'Rebutjar',
-        addFriend: 'Afegir amic',
-        alreadyFriends: 'Ja sou amics',
-        requestPending: 'Sol·licitud pendent',
-        searchInstructions: 'Introdueix un nom d\'usuari per buscar amics',
-        searchPlaceholder: 'Introdueix nom d\'usuari...',
-        searching: 'Buscant...',
-        userNotFound: 'Usuari no trobat',
-        noUserFound: 'No s\'ha trobat cap usuari amb aquest nom',
-        checkUsername: 'Si us plau, verifica el nom d\'usuari i torna-ho a provar',
-        howToFind: 'Com trobar amics',
-        findInstructions: 'Cerca amics pel seu nom d\'usuari. Tant tu com el teu amic heu de tenir GitHub connectat per enviar sol·licituds d\'amistat.',
-        requestSent: 'Sol·licitud d\'amistat enviada!',
-        requestAccepted: 'Sol·licitud d\'amistat acceptada!',
-        requestRejected: 'Sol·licitud d\'amistat rebutjada',
-        friendRemoved: 'Amic eliminat',
-        confirmRemove: 'Eliminar amic',
-        confirmRemoveMessage: 'Estàs segur que vols eliminar aquest amic?',
-        cannotAddYourself: 'No pots enviar-te una sol·licitud d\'amistat a tu mateix',
-        bothMustHaveGithub: 'Ambdós usuaris han de tenir GitHub connectat per ser amics',
-        status: {
-            none: 'No connectat',
-            requested: 'Sol·licitud enviada',
-            pending: 'Sol·licitud pendent',
-            friend: 'Amics',
-            rejected: 'Rebutjada',
-        },
-        acceptRequest: 'Acceptar sol·licitud',
-        removeFriend: 'Eliminar dels amics',
-        removeFriendConfirm: ({ name }: { name: string }) => `Estàs segur que vols eliminar ${name} dels teus amics?`,
-        requestSentDescription: ({ name }: { name: string }) => `La teva sol·licitud d\'amistat ha estat enviada a ${name}`,
-        requestFriendship: 'Sol·licitar amistat',
-        cancelRequest: 'Cancel·lar sol·licitud d\'amistat',
-        cancelRequestConfirm: ({ name }: { name: string }) => `Cancel·lar la teva sol·licitud d\'amistat a ${name}?`,
-        denyRequest: 'Rebutjar sol·licitud',
-        nowFriendsWith: ({ name }: { name: string }) => `Ara ets amic de ${name}`,
-    },
-
     usage: {
         // Usage panel strings
         today: 'Avui',
@@ -847,14 +780,6 @@ export const ca: TranslationStructure = {
         byModel: 'Per model',
         noData: "No hi ha dades d'ús disponibles",
     },
-
-    feed: {
-        // Feed notifications for friend requests and acceptances
-        friendRequestFrom: ({ name }: { name: string }) => `${name} t'ha enviat una sol·licitud d'amistat`,
-        friendRequestGeneric: 'Nova sol·licitud d\'amistat',
-        friendAccepted: ({ name }: { name: string }) => `Ara ets amic de ${name}`,
-        friendAcceptedGeneric: 'Sol·licitud d\'amistat acceptada',
-    }
 } as const;
 
 export type TranslationsCa = typeof ca;

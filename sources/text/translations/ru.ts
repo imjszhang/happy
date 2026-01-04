@@ -28,16 +28,8 @@ function plural({ count, one, few, many }: { count: number; one: string; few: st
 export const ru: TranslationStructure = {
     tabs: {
         // Tab navigation labels
-        inbox: 'Входящие',
         sessions: 'Терминалы',
         settings: 'Настройки',
-    },
-
-    inbox: {
-        // Inbox screen
-        emptyTitle: 'Входящие пусты',
-        emptyDescription: 'Подключитесь к друзьям, чтобы начать делиться сессиями',
-        updates: 'Обновления',
     },
 
     common: {
@@ -195,6 +187,7 @@ export const ru: TranslationStructure = {
         contactSupport: 'Если проблема сохранится, обратитесь в поддержку',
         sessionNotFound: 'Сессия не найдена',
         voiceSessionFailed: 'Не удалось запустить голосовую сессию',
+        voiceServiceUnavailable: 'Голосовой сервис временно недоступен',
         oauthInitializationFailed: 'Не удалось инициализировать процесс OAuth',
         tokenStorageFailed: 'Не удалось сохранить токены аутентификации',
         oauthStateMismatch: 'Ошибка проверки безопасности. Попробуйте снова',
@@ -219,12 +212,6 @@ export const ru: TranslationStructure = {
             `Не удалось отключить ${service}`,
         connectServiceFailed: ({ service }: { service: string }) =>
             `Не удалось подключить ${service}. Пожалуйста, попробуйте снова.`,
-        failedToLoadFriends: 'Не удалось загрузить список друзей',
-        failedToAcceptRequest: 'Не удалось принять запрос в друзья',
-        failedToRejectRequest: 'Не удалось отклонить запрос в друзья',
-        failedToRemoveFriend: 'Не удалось удалить друга',
-        searchFailed: 'Поиск не удался. Пожалуйста, попробуйте снова.',
-        failedToSendRequest: 'Не удалось отправить запрос в друзья',
     },
 
     newSession: {
@@ -400,13 +387,11 @@ export const ru: TranslationStructure = {
         agent: {
             claude: 'Claude',
             codex: 'Codex',
+            gemini: 'Gemini',
         },
         model: {
             title: 'МОДЕЛЬ',
-            default: 'Использовать настройки CLI',
-            adaptiveUsage: 'Opus до 50% использования, затем Sonnet',
-            sonnet: 'Sonnet',
-            opus: 'Opus',
+            configureInCli: 'Настройте модели в настройках CLI',
         },
         codexPermissionMode: {
             title: 'РЕЖИМ РАЗРЕШЕНИЙ CODEX',
@@ -418,15 +403,15 @@ export const ru: TranslationStructure = {
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
         },
-        codexModel: {
-            title: 'МОДЕЛЬ CODEX',
-            gpt5CodexLow: 'gpt-5-codex low',
-            gpt5CodexMedium: 'gpt-5-codex medium',
-            gpt5CodexHigh: 'gpt-5-codex high',
-            gpt5Minimal: 'GPT-5 Минимальная',
-            gpt5Low: 'GPT-5 Низкая',
-            gpt5Medium: 'GPT-5 Средняя',
-            gpt5High: 'GPT-5 Высокая',
+        geminiPermissionMode: {
+            title: 'РЕЖИМ РАЗРЕШЕНИЙ',
+            default: 'По умолчанию',
+            acceptEdits: 'Принимать правки',
+            plan: 'Режим планирования',
+            bypassPermissions: 'YOLO режим',
+            badgeAcceptAllEdits: 'Принимать все правки',
+            badgeBypassAllPermissions: 'Обход всех разрешений',
+            badgePlanMode: 'Режим планирования',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `Осталось ${percent}%`,
@@ -660,7 +645,6 @@ export const ru: TranslationStructure = {
         linkNewDevice: 'Связать новое устройство',
         restoreWithSecretKey: 'Восстановить секретным ключом',
         whatsNew: 'Что нового',
-        friends: 'Друзья',
     },
 
     welcome: {
@@ -806,57 +790,6 @@ export const ru: TranslationStructure = {
         error: 'Не удалось загрузить артефакт',
     },
 
-    friends: {
-        // Friends feature
-        title: 'Друзья',
-        manageFriends: 'Управляйте своими друзьями и связями',
-        searchTitle: 'Найти друзей',
-        pendingRequests: 'Запросы в друзья',
-        myFriends: 'Мои друзья',
-        noFriendsYet: 'У вас пока нет друзей',
-        findFriends: 'Найти друзей',
-        remove: 'Удалить',
-        pendingRequest: 'Ожидается',
-        sentOn: ({ date }: { date: string }) => `Отправлено ${date}`,
-        accept: 'Принять',
-        reject: 'Отклонить',
-        addFriend: 'Добавить в друзья',
-        alreadyFriends: 'Уже в друзьях',
-        requestPending: 'Запрос отправлен',
-        searchInstructions: 'Введите имя пользователя для поиска друзей',
-        searchPlaceholder: 'Введите имя пользователя...',
-        searching: 'Поиск...',
-        userNotFound: 'Пользователь не найден',
-        noUserFound: 'Пользователь с таким именем не найден',
-        checkUsername: 'Пожалуйста, проверьте имя пользователя и попробуйте снова',
-        howToFind: 'Как найти друзей',
-        findInstructions: 'Ищите друзей по имени пользователя. И вы, и ваш друг должны подключить GitHub для отправки запросов в друзья.',
-        requestSent: 'Запрос в друзья отправлен!',
-        requestAccepted: 'Запрос в друзья принят!',
-        requestRejected: 'Запрос в друзья отклонён',
-        friendRemoved: 'Друг удалён',
-        confirmRemove: 'Удалить из друзей',
-        confirmRemoveMessage: 'Вы уверены, что хотите удалить этого друга?',
-        cannotAddYourself: 'Вы не можете отправить запрос в друзья самому себе',
-        bothMustHaveGithub: 'Оба пользователя должны подключить GitHub, чтобы стать друзьями',
-        status: {
-            none: 'Не подключен',
-            requested: 'Запрос отправлен',
-            pending: 'Запрос ожидается',
-            friend: 'Друзья',
-            rejected: 'Отклонено',
-        },
-        acceptRequest: 'Принять запрос',
-        removeFriend: 'Удалить из друзей',
-        removeFriendConfirm: ({ name }: { name: string }) => `Вы уверены, что хотите удалить ${name} из друзей?`,
-        requestSentDescription: ({ name }: { name: string }) => `Ваш запрос в друзья отправлен пользователю ${name}`,
-        requestFriendship: 'Отправить запрос в друзья',
-        cancelRequest: 'Отменить запрос в друзья',
-        cancelRequestConfirm: ({ name }: { name: string }) => `Отменить ваш запрос в друзья к ${name}?`,
-        denyRequest: 'Отклонить запрос',
-        nowFriendsWith: ({ name }: { name: string }) => `Теперь вы друзья с ${name}`,
-    },
-
     usage: {
         // Usage panel strings
         today: 'Сегодня',
@@ -870,14 +803,6 @@ export const ru: TranslationStructure = {
         byModel: 'По модели',
         noData: 'Данные об использовании недоступны',
     },
-
-    feed: {
-        // Feed notifications for friend requests and acceptances
-        friendRequestFrom: ({ name }: { name: string }) => `${name} отправил вам запрос в друзья`,
-        friendRequestGeneric: 'Новый запрос в друзья',
-        friendAccepted: ({ name }: { name: string }) => `Вы теперь друзья с ${name}`,
-        friendAcceptedGeneric: 'Запрос в друзья принят',
-    }
 } as const;
 
 export type TranslationsRu = typeof ru;

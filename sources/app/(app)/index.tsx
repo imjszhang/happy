@@ -75,6 +75,19 @@ function NotAuthenticated() {
                     </View>
                     <View style={styles.buttonContainerSecondary}>
                         <RoundButton
+<<<<<<< HEAD
+=======
+                            title={t('welcome.loginWithSecretKey')}
+                            onPress={() => {
+                                trackAccountRestored();
+                                router.push('/restore/manual');
+                            }}
+                            display="secondary"
+                        />
+                    </View>
+                    <View style={styles.buttonContainerSecondary}>
+                        <RoundButton
+>>>>>>> simplify-githubforker
                             size="normal"
                             title={t('welcome.createAccount')}
                             action={createAccount}
@@ -136,6 +149,19 @@ function NotAuthenticated() {
                             </View>
                             <View style={styles.landscapeButtonContainerSecondary}>
                                 <RoundButton
+<<<<<<< HEAD
+=======
+                                    title={t('welcome.loginWithSecretKey')}
+                                    onPress={() => {
+                                        trackAccountRestored();
+                                        router.push('/restore/manual');
+                                    }}
+                                    display="secondary"
+                                />
+                            </View>
+                            <View style={styles.landscapeButtonContainerSecondary}>
+                                <RoundButton
+>>>>>>> simplify-githubforker
                                     size="normal"
                                     title={t('welcome.createAccount')}
                                     action={createAccount}
@@ -209,6 +235,9 @@ const styles = StyleSheet.create((theme) => ({
         marginBottom: 16,
     },
     buttonContainerSecondary: {
+        maxWidth: 280,
+        width: '100%',
+        marginBottom: 8,
     },
     // Landscape styles
     landscapeContainer: {

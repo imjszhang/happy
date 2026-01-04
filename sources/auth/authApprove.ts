@@ -1,11 +1,16 @@
 
 import axios from 'axios';
 import { encodeBase64 } from "../encryption/base64";
-import { getServerUrl } from "@/sync/serverConfig";
+import { getServerUrl, getApiKey } from "@/sync/serverConfig";
 
 interface AuthRequestStatus {
     status: 'not_found' | 'pending' | 'authorized';
     supportsV2: boolean;
+}
+
+function getApiKeyHeader(): Record<string, string> {
+    const apiKey = getApiKey();
+    return apiKey ? { 'X-API-Key': apiKey } : {};
 }
 
 export async function authApprove(token: string, publicKey: Uint8Array, answerV1: Uint8Array, answerV2: Uint8Array) {
@@ -18,7 +23,8 @@ export async function authApprove(token: string, publicKey: Uint8Array, answerV1
         {
             params: {
                 publicKey: publicKeyBase64
-            }
+            },
+            headers: getApiKeyHeader()
         }
     );
     
@@ -44,6 +50,7 @@ export async function authApprove(token: string, publicKey: Uint8Array, answerV1
             response: supportsV2 ? encodeBase64(answerV2) : encodeBase64(answerV1)
         }, {
             headers: {
+                ...getApiKeyHeader(),
                 'Authorization': `Bearer ${token}`,
             }
         });

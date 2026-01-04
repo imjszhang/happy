@@ -17,16 +17,8 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 export const es: TranslationStructure = {
     tabs: {
         // Tab navigation labels
-        inbox: 'Bandeja',
         sessions: 'Terminales',
         settings: 'Configuración',
-    },
-
-    inbox: {
-        // Inbox screen
-        emptyTitle: 'Bandeja vacía',
-        emptyDescription: 'Conéctate con amigos para empezar a compartir sesiones',
-        updates: 'Actualizaciones',
     },
 
     common: {
@@ -212,6 +204,7 @@ export const es: TranslationStructure = {
         contactSupport: 'Contacta soporte si el problema persiste',
         sessionNotFound: 'Sesión no encontrada',
         voiceSessionFailed: 'Falló al iniciar sesión de voz',
+        voiceServiceUnavailable: 'El servicio de voz no está disponible temporalmente',
         oauthInitializationFailed: 'Falló al inicializar el flujo OAuth',
         tokenStorageFailed: 'Falló al almacenar los tokens de autenticación',
         oauthStateMismatch: 'Falló la validación de seguridad. Inténtalo de nuevo',
@@ -236,12 +229,6 @@ export const es: TranslationStructure = {
             `Falló al desconectar ${service}`,
         connectServiceFailed: ({ service }: { service: string }) =>
             `No se pudo conectar ${service}. Por favor, inténtalo de nuevo.`,
-        failedToLoadFriends: 'No se pudo cargar la lista de amigos',
-        failedToAcceptRequest: 'No se pudo aceptar la solicitud de amistad',
-        failedToRejectRequest: 'No se pudo rechazar la solicitud de amistad',
-        failedToRemoveFriend: 'No se pudo eliminar al amigo',
-        searchFailed: 'La búsqueda falló. Por favor, intenta de nuevo.',
-        failedToSendRequest: 'No se pudo enviar la solicitud de amistad',
     },
 
     newSession: {
@@ -390,13 +377,11 @@ export const es: TranslationStructure = {
         agent: {
             claude: 'Claude',
             codex: 'Codex',
+            gemini: 'Gemini',
         },
         model: {
             title: 'MODELO',
-            default: 'Usar configuración del CLI',
-            adaptiveUsage: 'Opus hasta 50% de uso, luego Sonnet',
-            sonnet: 'Sonnet',
-            opus: 'Opus',
+            configureInCli: 'Configurar modelos en la configuración del CLI',
         },
         codexPermissionMode: {
             title: 'MODO DE PERMISOS CODEX',
@@ -408,15 +393,15 @@ export const es: TranslationStructure = {
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
         },
-        codexModel: {
-            title: 'MODELO CODEX',
-            gpt5CodexLow: 'gpt-5-codex low',
-            gpt5CodexMedium: 'gpt-5-codex medium',
-            gpt5CodexHigh: 'gpt-5-codex high',
-            gpt5Minimal: 'GPT-5 Mínimo',
-            gpt5Low: 'GPT-5 Bajo',
-            gpt5Medium: 'GPT-5 Medio',
-            gpt5High: 'GPT-5 Alto',
+        geminiPermissionMode: {
+            title: 'MODO DE PERMISOS',
+            default: 'Por defecto',
+            acceptEdits: 'Aceptar ediciones',
+            plan: 'Modo de planificación',
+            bypassPermissions: 'Modo Yolo',
+            badgeAcceptAllEdits: 'Aceptar todas las ediciones',
+            badgeBypassAllPermissions: 'Omitir todos los permisos',
+            badgePlanMode: 'Modo de planificación',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% restante`,
@@ -662,7 +647,6 @@ export const es: TranslationStructure = {
         linkNewDevice: 'Vincular nuevo dispositivo', 
         restoreWithSecretKey: 'Restaurar con clave secreta',
         whatsNew: 'Novedades',
-        friends: 'Amigos',
     },
 
     welcome: {
@@ -784,57 +768,6 @@ export const es: TranslationStructure = {
         error: 'Error al cargar el artefacto',
     },
 
-    friends: {
-        // Friends feature
-        title: 'Amigos',
-        manageFriends: 'Administra tus amigos y conexiones',
-        searchTitle: 'Buscar amigos',
-        pendingRequests: 'Solicitudes de amistad',
-        myFriends: 'Mis amigos',
-        noFriendsYet: 'Aún no tienes amigos',
-        findFriends: 'Buscar amigos',
-        remove: 'Eliminar',
-        pendingRequest: 'Pendiente',
-        sentOn: ({ date }: { date: string }) => `Enviado el ${date}`,
-        accept: 'Aceptar',
-        reject: 'Rechazar',
-        addFriend: 'Agregar amigo',
-        alreadyFriends: 'Ya son amigos',
-        requestPending: 'Solicitud pendiente',
-        searchInstructions: 'Ingresa un nombre de usuario para buscar amigos',
-        searchPlaceholder: 'Ingresa nombre de usuario...',
-        searching: 'Buscando...',
-        userNotFound: 'Usuario no encontrado',
-        noUserFound: 'No se encontró ningún usuario con ese nombre',
-        checkUsername: 'Por favor, verifica el nombre de usuario e intenta de nuevo',
-        howToFind: 'Cómo encontrar amigos',
-        findInstructions: 'Busca amigos por su nombre de usuario. Tanto tú como tu amigo deben tener GitHub conectado para enviar solicitudes de amistad.',
-        requestSent: '¡Solicitud de amistad enviada!',
-        requestAccepted: '¡Solicitud de amistad aceptada!',
-        requestRejected: 'Solicitud de amistad rechazada',
-        friendRemoved: 'Amigo eliminado',
-        confirmRemove: 'Eliminar amigo',
-        confirmRemoveMessage: '¿Estás seguro de que quieres eliminar a este amigo?',
-        cannotAddYourself: 'No puedes enviarte una solicitud de amistad a ti mismo',
-        bothMustHaveGithub: 'Ambos usuarios deben tener GitHub conectado para ser amigos',
-        status: {
-            none: 'No conectado',
-            requested: 'Solicitud enviada',
-            pending: 'Solicitud pendiente',
-            friend: 'Amigos',
-            rejected: 'Rechazada',
-        },
-        acceptRequest: 'Aceptar solicitud',
-        removeFriend: 'Eliminar de amigos',
-        removeFriendConfirm: ({ name }: { name: string }) => `¿Estás seguro de que quieres eliminar a ${name} de tus amigos?`,
-        requestSentDescription: ({ name }: { name: string }) => `Tu solicitud de amistad ha sido enviada a ${name}`,
-        requestFriendship: 'Solicitar amistad',
-        cancelRequest: 'Cancelar solicitud de amistad',
-        cancelRequestConfirm: ({ name }: { name: string }) => `¿Cancelar tu solicitud de amistad a ${name}?`,
-        denyRequest: 'Rechazar solicitud',
-        nowFriendsWith: ({ name }: { name: string }) => `Ahora eres amigo de ${name}`,
-    },
-
     usage: {
         // Usage panel strings
         today: 'Hoy',
@@ -848,14 +781,6 @@ export const es: TranslationStructure = {
         byModel: 'Por modelo',
         noData: 'No hay datos de uso disponibles',
     },
-
-    feed: {
-        // Feed notifications for friend requests and acceptances
-        friendRequestFrom: ({ name }: { name: string }) => `${name} te envió una solicitud de amistad`,
-        friendRequestGeneric: 'Nueva solicitud de amistad',
-        friendAccepted: ({ name }: { name: string }) => `Ahora eres amigo de ${name}`,
-        friendAcceptedGeneric: 'Solicitud de amistad aceptada',
-    }
 } as const;
 
 export type TranslationsEs = typeof es;
