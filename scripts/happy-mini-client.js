@@ -2,8 +2,8 @@
  * HappyMiniClient - Happy Coder 完整命令行客户端
  * 
  * > 创建时间: 2025-12-20
- * > 最后更新: 2025-12-26
- * > 当前版本: 2.1.0
+ * > 最后更新: 2026-01-09
+ * > 当前版本: 3.0.0
  * 
  * 功能简介：
  * ==========
@@ -14,8 +14,11 @@
  * -----------
  * - 会话管理 - 查看会话列表、消息、发送消息、删除会话
  * - 会话控制 - 软中止(abort)、硬中止(kill)操作
+ * - 远程启动 - 在机器上远程启动新会话 (spawn)
+ * - 文件操作 - 读写文件、列目录、搜索 (cat/write/ls/tree/rg/bash)
+ * - 任务管理 - Todo 任务的增删改查
  * - 账户管理 - 查看/修改资料和设置
- * - 机器管理 - 查看 CLI 实例列表和状态
+ * - 机器管理 - 查看 CLI 实例列表、停止 Daemon、执行命令
  * - 使用量统计 - 查询 Token 使用量和费用
  * - Artifacts - 创建、查看、更新、删除制品
  * - KV 存储 - 键值对存储操作
@@ -29,6 +32,7 @@
  * 3. WebSocket 实时消息同步
  * 4. 命令行模式快速操作
  * 5. 交互式菜单导航
+ * 6. 多 Agent 支持 (Claude/Codex/Gemini)
  * 
  * 使用方法：
  * ---------
@@ -39,11 +43,18 @@
  * # 指定服务器、API Key 和模式
  * node scripts/happy-mini-client.js --secret=xxx --server=URL --apikey=KEY --mode=yolo
  * 
+ * # 远程启动会话
+ * > spawn <machine-id> /path/to/project --agent=gemini
+ * 
+ * # 文件操作
+ * > cat <session-id> /path/to/file
+ * > ls <session-id> /path/to/dir
+ * 
+ * # 任务管理
+ * > todo                # 查看任务列表
+ * > todo add 新任务     # 添加任务
+ * 
  * # 交互式命令
- * > profile          # 查看账户资料
- * > settings         # 查看账户设置
- * > machines         # 查看机器列表
- * > usage            # 查看使用量统计
  * > help             # 显示帮助
  * ```
  * 
@@ -53,9 +64,21 @@
  * - 会话数据：metadata, agentState (加密)
  * - 消息内容：role, content (加密)
  * - 设置数据：key-value pairs (加密)
+ * - Todo 数据：使用 KV 存储，SecretBox 加密
  * 
  * CHANGELOG：
  * ==========
+ * 
+ * ## [3.0.0] - 2026-01-09
+ * 
+ * ### 新增
+ * - ✨ Todo 任务管理系统 - 完整的任务增删改查功能
+ * - ✨ 远程启动会话 (spawn) - 支持多 Agent 类型选择
+ * - ✨ 文件操作命令 - cat/write/ls/tree/rg/bash
+ * - ✨ 机器管理扩展 - stop/bash 命令
+ * - ✨ Machine RPC 基础设施
+ * - ✨ Agent 类型显示 - 在会话列表显示 Claude/Codex/Gemini 图标
+ * - ✨ 设置显示增强 - 显示更多设置字段
  * 
  * ## [2.2.0] - 2026-01-04
  * 
@@ -1057,6 +1080,334 @@ async function disconnectService(token, service) {
 let CURRENT_TOKEN = null;
 
 // ============================================================================
+// Todo 任务管理 - 常量和数据结构
+// ============================================================================
+
+const TODO_PREFIX = 'todo.';
+const TODO_INDEX_KEY = 'todo.index';
+
+// TodoState 缓存
+let cachedTodoState = null;
+
+/**
+ * 获取 Todo Key
+ */
+function getTodoKey(id) {
+    return `${TODO_PREFIX}${id}`;
+}
+
+/**
+ * 加密 Todo 数据
+ */
+function encryptTodoData(data) {
+    return encryption.encryptLegacy(data);
+}
+
+/**
+ * 解密 Todo 数据
+ */
+function decryptTodoData(encrypted) {
+    return encryption.decryptLegacy(encrypted);
+}
+
+// ============================================================================
+// Todo 任务管理 - API 操作
+// ============================================================================
+
+/**
+ * 获取所有 Todo 任务
+ */
+async function fetchTodos() {
+    const response = await kvList(CURRENT_TOKEN, {
+        prefix: TODO_PREFIX,
+        limit: 1000
+    });
+    
+    const state = {
+        todos: {},
+        undoneOrder: [],
+        doneOrder: [],
+        versions: {}
+    };
+    
+    for (const item of response.items || []) {
+        state.versions[item.key] = item.version;
+        
+        try {
+            const decrypted = decryptTodoData(item.value);
+            
+            if (item.key === TODO_INDEX_KEY) {
+                const index = decrypted;
+                state.undoneOrder = index.undoneOrder || [];
+                state.doneOrder = index.completedOrder || [];
+            } else if (item.key.startsWith(TODO_PREFIX)) {
+                const todoId = item.key.substring(TODO_PREFIX.length);
+                if (todoId && todoId !== 'index') {
+                    state.todos[todoId] = decrypted;
+                }
+            }
+        } catch (error) {
+            // 忽略解密错误
+        }
+    }
+    
+    // 清理：移除不存在的 ID
+    state.undoneOrder = state.undoneOrder.filter(id => id in state.todos);
+    state.doneOrder = state.doneOrder.filter(id => id in state.todos);
+    
+    // 添加未在任何列表中的 todo
+    const allOrderedIds = new Set([...state.undoneOrder, ...state.doneOrder]);
+    for (const todoId in state.todos) {
+        if (!allOrderedIds.has(todoId)) {
+            if (state.todos[todoId].done) {
+                state.doneOrder.push(todoId);
+            } else {
+                state.undoneOrder.push(todoId);
+            }
+        }
+    }
+    
+    cachedTodoState = state;
+    return state;
+}
+
+/**
+ * 添加新任务
+ */
+async function addTodo(title) {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    
+    const newTodo = {
+        id,
+        title,
+        done: false,
+        createdAt: now,
+        updatedAt: now,
+        linkedSessions: {}
+    };
+    
+    // 获取当前索引
+    const indexResponse = await kvGet(CURRENT_TOKEN, TODO_INDEX_KEY);
+    let currentIndex = { undoneOrder: [], completedOrder: [] };
+    let indexVersion = -1;
+    
+    if (indexResponse) {
+        indexVersion = indexResponse.version;
+        try {
+            currentIndex = decryptTodoData(indexResponse.value);
+        } catch (err) {
+            // 使用默认索引
+        }
+    }
+    
+    // 更新索引
+    const newIndex = {
+        undoneOrder: [...(currentIndex.undoneOrder || []), id],
+        completedOrder: currentIndex.completedOrder || []
+    };
+    
+    // 写入 todo 和索引
+    const mutations = [
+        {
+            key: getTodoKey(id),
+            value: encryptTodoData(newTodo),
+            version: -1
+        },
+        {
+            key: TODO_INDEX_KEY,
+            value: encryptTodoData(newIndex),
+            version: indexVersion
+        }
+    ];
+    
+    const result = await kvMutate(CURRENT_TOKEN, mutations);
+    
+    if (result.success) {
+        cachedTodoState = null; // 清除缓存
+        return id;
+    }
+    
+    throw new Error(result.errors?.[0]?.error || '添加任务失败');
+}
+
+/**
+ * 切换任务完成状态
+ */
+async function toggleTodo(id) {
+    if (!cachedTodoState) {
+        await fetchTodos();
+    }
+    
+    const todo = cachedTodoState.todos[id];
+    if (!todo) {
+        throw new Error('任务不存在');
+    }
+    
+    const now = Date.now();
+    const updatedTodo = {
+        ...todo,
+        done: !todo.done,
+        updatedAt: now,
+        completedAt: !todo.done ? now : undefined
+    };
+    
+    // 获取当前索引
+    const indexResponse = await kvGet(CURRENT_TOKEN, TODO_INDEX_KEY);
+    let currentIndex = { undoneOrder: [], completedOrder: [] };
+    let indexVersion = -1;
+    
+    if (indexResponse) {
+        indexVersion = indexResponse.version;
+        try {
+            currentIndex = decryptTodoData(indexResponse.value);
+        } catch (err) {
+            // 使用默认索引
+        }
+    }
+    
+    // 更新索引
+    let newUndoneOrder = [...(currentIndex.undoneOrder || [])];
+    let newCompletedOrder = [...(currentIndex.completedOrder || [])];
+    
+    if (updatedTodo.done) {
+        newUndoneOrder = newUndoneOrder.filter(tid => tid !== id);
+        newCompletedOrder = [id, ...newCompletedOrder.filter(tid => tid !== id)];
+    } else {
+        newCompletedOrder = newCompletedOrder.filter(tid => tid !== id);
+        newUndoneOrder = [...newUndoneOrder.filter(tid => tid !== id), id];
+    }
+    
+    const newIndex = {
+        undoneOrder: newUndoneOrder,
+        completedOrder: newCompletedOrder
+    };
+    
+    // 获取 todo 版本
+    const todoResponse = await kvGet(CURRENT_TOKEN, getTodoKey(id));
+    const todoVersion = todoResponse?.version || -1;
+    
+    // 写入更新
+    const mutations = [
+        {
+            key: getTodoKey(id),
+            value: encryptTodoData(updatedTodo),
+            version: todoVersion
+        },
+        {
+            key: TODO_INDEX_KEY,
+            value: encryptTodoData(newIndex),
+            version: indexVersion
+        }
+    ];
+    
+    const result = await kvMutate(CURRENT_TOKEN, mutations);
+    
+    if (result.success) {
+        cachedTodoState = null;
+        return updatedTodo.done;
+    }
+    
+    throw new Error(result.errors?.[0]?.error || '更新任务失败');
+}
+
+/**
+ * 编辑任务标题
+ */
+async function editTodoTitle(id, title) {
+    if (!cachedTodoState) {
+        await fetchTodos();
+    }
+    
+    const todo = cachedTodoState.todos[id];
+    if (!todo) {
+        throw new Error('任务不存在');
+    }
+    
+    const updatedTodo = {
+        ...todo,
+        title,
+        updatedAt: Date.now()
+    };
+    
+    const todoResponse = await kvGet(CURRENT_TOKEN, getTodoKey(id));
+    const todoVersion = todoResponse?.version || -1;
+    
+    const result = await kvMutate(CURRENT_TOKEN, [{
+        key: getTodoKey(id),
+        value: encryptTodoData(updatedTodo),
+        version: todoVersion
+    }]);
+    
+    if (result.success) {
+        cachedTodoState = null;
+        return;
+    }
+    
+    throw new Error(result.errors?.[0]?.error || '编辑任务失败');
+}
+
+/**
+ * 删除任务
+ */
+async function deleteTodo(id) {
+    if (!cachedTodoState) {
+        await fetchTodos();
+    }
+    
+    if (!cachedTodoState.todos[id]) {
+        throw new Error('任务不存在');
+    }
+    
+    // 获取当前索引
+    const indexResponse = await kvGet(CURRENT_TOKEN, TODO_INDEX_KEY);
+    let currentIndex = { undoneOrder: [], completedOrder: [] };
+    let indexVersion = -1;
+    
+    if (indexResponse) {
+        indexVersion = indexResponse.version;
+        try {
+            currentIndex = decryptTodoData(indexResponse.value);
+        } catch (err) {
+            // 使用默认索引
+        }
+    }
+    
+    // 从索引中移除
+    const newIndex = {
+        undoneOrder: (currentIndex.undoneOrder || []).filter(tid => tid !== id),
+        completedOrder: (currentIndex.completedOrder || []).filter(tid => tid !== id)
+    };
+    
+    // 获取 todo 版本
+    const todoResponse = await kvGet(CURRENT_TOKEN, getTodoKey(id));
+    const todoVersion = todoResponse?.version || 0;
+    
+    // 删除 todo 并更新索引
+    const mutations = [
+        {
+            key: getTodoKey(id),
+            value: null,
+            version: todoVersion
+        },
+        {
+            key: TODO_INDEX_KEY,
+            value: encryptTodoData(newIndex),
+            version: indexVersion
+        }
+    ];
+    
+    const result = await kvMutate(CURRENT_TOKEN, mutations);
+    
+    if (result.success) {
+        cachedTodoState = null;
+        return;
+    }
+    
+    throw new Error(result.errors?.[0]?.error || '删除任务失败');
+}
+
+// ============================================================================
 // WebSocket 连接
 // ============================================================================
 
@@ -1350,6 +1701,193 @@ async function sessionKillSession(sessionId) {
 }
 
 // ============================================================================
+// Machine RPC 调用
+// ============================================================================
+
+async function machineRPC(machineId, method, params = {}) {
+    if (!socket) throw new Error('WebSocket 未连接');
+    
+    const enc = encryption.getMachineEncryption(machineId);
+    if (!enc) throw new Error('机器加密未初始化');
+    
+    const encrypted = encryption.encrypt(enc, params);
+    const encryptedBase64 = encodeBase64(encrypted, 'base64');
+    
+    const result = await socket.emitWithAck('rpc-call', {
+        method: `${machineId}:${method}`,
+        params: encryptedBase64
+    });
+    
+    if (result.ok) {
+        if (result.result) {
+            const decrypted = encryption.decrypt(enc, decodeBase64(result.result, 'base64'));
+            return decrypted;
+        }
+        return {};
+    }
+    throw new Error(result.error || 'RPC 调用失败');
+}
+
+// 有效的 Agent 类型
+const VALID_AGENTS = ['claude', 'codex', 'gemini'];
+
+// Agent 图标映射
+const AGENT_ICONS = {
+    'claude': '🤖',
+    'codex': '⚡',
+    'gemini': '💎'
+};
+
+/**
+ * 获取 Agent 图标
+ */
+function getAgentIcon(flavor) {
+    if (!flavor) return '🤖';
+    const lowerFlavor = flavor.toLowerCase();
+    return AGENT_ICONS[lowerFlavor] || '🤖';
+}
+
+/**
+ * 远程启动新会话
+ */
+async function spawnSession(machineId, directory, options = {}) {
+    const { agent = 'claude', approveCreate = false } = options;
+    
+    const fullMachineId = Object.keys(machines).find(id => id.startsWith(machineId)) || machineId;
+    if (!machines[fullMachineId]) {
+        throw new Error('机器不存在，请先执行 machines 命令');
+    }
+    
+    if (!machines[fullMachineId].active) {
+        throw new Error('机器离线，无法启动会话');
+    }
+    
+    const result = await machineRPC(fullMachineId, 'spawn-happy-session', {
+        type: 'spawn-in-directory',
+        directory,
+        approvedNewDirectoryCreation: approveCreate,
+        agent
+    });
+    
+    return result;
+}
+
+/**
+ * 停止机器 Daemon
+ */
+async function stopMachineDaemon(machineId) {
+    const fullMachineId = Object.keys(machines).find(id => id.startsWith(machineId)) || machineId;
+    if (!machines[fullMachineId]) {
+        throw new Error('机器不存在');
+    }
+    
+    const result = await machineRPC(fullMachineId, 'stop-daemon', {});
+    return result;
+}
+
+/**
+ * 在机器上执行命令
+ */
+async function executeMachineBash(machineId, command, cwd = '~') {
+    const fullMachineId = Object.keys(machines).find(id => id.startsWith(machineId)) || machineId;
+    if (!machines[fullMachineId]) {
+        throw new Error('机器不存在');
+    }
+    
+    const result = await machineRPC(fullMachineId, 'bash', { command, cwd });
+    return result;
+}
+
+// ============================================================================
+// Session 文件操作 RPC
+// ============================================================================
+
+/**
+ * 读取远程文件
+ */
+async function sessionReadFile(sessionId, filePath) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    const result = await sessionRPC(fullId, 'readFile', { path: filePath });
+    return result;
+}
+
+/**
+ * 写入远程文件
+ */
+async function sessionWriteFile(sessionId, filePath, content, expectedHash = null) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    // 将内容编码为 base64
+    const contentBase64 = Buffer.from(content, 'utf8').toString('base64');
+    
+    const result = await sessionRPC(fullId, 'writeFile', { 
+        path: filePath, 
+        content: contentBase64,
+        expectedHash 
+    });
+    return result;
+}
+
+/**
+ * 列出远程目录
+ */
+async function sessionListDirectory(sessionId, dirPath) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    const result = await sessionRPC(fullId, 'listDirectory', { path: dirPath });
+    return result;
+}
+
+/**
+ * 获取目录树
+ */
+async function sessionGetDirectoryTree(sessionId, dirPath, maxDepth = 3) {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    const result = await sessionRPC(fullId, 'getDirectoryTree', { path: dirPath, maxDepth });
+    return result;
+}
+
+/**
+ * 运行 ripgrep 搜索
+ */
+async function sessionRipgrep(sessionId, pattern, cwd = '.') {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    const result = await sessionRPC(fullId, 'ripgrep', { args: [pattern], cwd });
+    return result;
+}
+
+/**
+ * 执行 bash 命令
+ */
+async function sessionBash(sessionId, command, cwd = '.') {
+    const fullId = Object.keys(sessions).find(id => id.startsWith(sessionId)) || sessionId;
+    if (!sessions[fullId]) {
+        throw new Error('会话不存在');
+    }
+    
+    const result = await sessionRPC(fullId, 'bash', { command, cwd });
+    return result;
+}
+
+// ============================================================================
 // 命令行界面 - 全局状态
 // ============================================================================
 
@@ -1401,7 +1939,11 @@ async function displaySessions() {
             const status = session.active ? '🟢 在线' : '⚪ 离线';
             const date = new Date(session.updatedAt).toLocaleString();
             
-            console.log(`${status} [${session.id.substring(0, 8)}...] ${projectName}`);
+            // 获取 agent 类型 (flavor)
+            const flavor = metadata?.flavor;
+            const agentIcon = getAgentIcon(flavor);
+            
+            console.log(`${status} ${agentIcon} [${session.id.substring(0, 8)}...] ${projectName}`);
             console.log(`   更新于: ${date}`);
             console.log('');
         }
@@ -1454,8 +1996,10 @@ async function displaySessionsWithIndex() {
             const projectName = (metadata?.path ?? metadata?.cwd)?.split(/[/\\]/).pop() || '未知项目';
             const status = session.active ? '🟢' : '⚪';
             const date = new Date(session.updatedAt).toLocaleString();
+            const flavor = metadata?.flavor;
+            const agentIcon = getAgentIcon(flavor);
             
-            console.log(`[${idx}] ${status} ${projectName}`);
+            console.log(`[${idx}] ${status} ${agentIcon} ${projectName}`);
             console.log(`    ID: ${session.id.substring(0, 8)}... | 更新: ${date}`);
         }
         
@@ -1620,17 +2164,31 @@ async function displaySettings() {
             return;
         }
         
+        console.log('--- 显示设置 ---');
         console.log(`视图内联工具调用: ${settings.viewInline ? '✓' : '✗'}`);
         console.log(`展开 Todo 列表: ${settings.expandTodos ? '✓' : '✗'}`);
         console.log(`显示行号: ${settings.showLineNumbers ? '✓' : '✗'}`);
+        console.log(`工具视图行号: ${settings.showLineNumbersInToolViews ? '✓' : '✗'}`);
         console.log(`换行显示: ${settings.wrapLinesInDiffs ? '✓' : '✗'}`);
-        console.log(`分析数据收集: ${settings.analyticsOptOut ? '已禁用' : '已启用'}`);
-        console.log(`实验性功能: ${settings.experiments ? '✓' : '✗'}`);
         console.log(`头像样式: ${settings.avatarStyle || 'brutalist'}`);
+        console.log(`显示 AI 图标: ${settings.showFlavorIcons ? '✓' : '✗'}`);
         console.log(`紧凑会话视图: ${settings.compactSessionView ? '✓' : '✗'}`);
         console.log(`隐藏不活动会话: ${settings.hideInactiveSessions ? '✓' : '✗'}`);
+        console.log(`始终显示上下文大小: ${settings.alwaysShowContextSize ? '✓' : '✗'}`);
+        console.log(`回车发送 (Web): ${settings.agentInputEnterToSend ? '✓' : '✗'}`);
+        
+        console.log('\n--- 语言设置 ---');
         console.log(`界面语言: ${settings.preferredLanguage || '自动'}`);
         console.log(`语音助手语言: ${settings.voiceAssistantLanguage || '自动'}`);
+        
+        console.log('\n--- 默认选项 ---');
+        console.log(`默认 Agent: ${settings.lastUsedAgent || '未设置'}`);
+        console.log(`默认权限模式: ${settings.lastUsedPermissionMode || '未设置'}`);
+        console.log(`默认模型模式: ${settings.lastUsedModelMode || '未设置'}`);
+        
+        console.log('\n--- 其他 ---');
+        console.log(`分析数据收集: ${settings.analyticsOptOut ? '已禁用' : '已启用'}`);
+        console.log(`实验性功能: ${settings.experiments ? '✓' : '✗'}`);
         
         if (settings.inferenceOpenAIKey) {
             console.log(`OpenAI Key: ✓ 已设置`);
@@ -2190,6 +2748,405 @@ async function handleDeleteSession(sessionId) {
 }
 
 // ============================================================================
+// 显示函数 - 远程启动会话
+// ============================================================================
+
+async function handleSpawnSession(machineIdPrefix, directory, options = {}) {
+    console.log(`\n🚀 远程启动会话...`);
+    console.log(`   机器: ${machineIdPrefix}`);
+    console.log(`   目录: ${directory}`);
+    if (options.agent) {
+        console.log(`   Agent: ${options.agent}`);
+    }
+    
+    try {
+        const result = await spawnSession(machineIdPrefix, directory, options);
+        
+        if (result.type === 'success') {
+            console.log(`✅ 会话已启动`);
+            console.log(`   会话 ID: ${result.sessionId?.substring(0, 8) || 'unknown'}...`);
+            // 刷新会话列表
+            await displaySessions();
+        } else if (result.type === 'requestToApproveDirectoryCreation') {
+            console.log(`⚠️ 目录不存在: ${result.directory}`);
+            console.log(`   使用 spawn --approve-create 参数批准创建目录`);
+        } else if (result.type === 'error') {
+            console.log(`❌ 启动失败: ${result.errorMessage}`);
+        } else {
+            console.log(`❌ 未知响应: ${JSON.stringify(result)}`);
+        }
+    } catch (error) {
+        console.error('启动会话失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 文件操作
+// ============================================================================
+
+async function handleReadFile(sessionIdPrefix, filePath) {
+    console.log(`\n📄 读取文件: ${filePath}...`);
+    
+    try {
+        const result = await sessionReadFile(sessionIdPrefix, filePath);
+        
+        if (result.success) {
+            // 解码 base64 内容
+            const content = Buffer.from(result.content, 'base64').toString('utf8');
+            console.log('\n--- 文件内容 ---');
+            console.log(content);
+            console.log('--- 结束 ---');
+        } else {
+            console.log(`❌ 读取失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('读取文件失败:', error.message);
+    }
+}
+
+async function handleWriteFile(sessionIdPrefix, filePath, content) {
+    console.log(`\n📝 写入文件: ${filePath}...`);
+    
+    try {
+        const result = await sessionWriteFile(sessionIdPrefix, filePath, content);
+        
+        if (result.success) {
+            console.log(`✅ 文件已写入`);
+            if (result.hash) {
+                console.log(`   Hash: ${result.hash.substring(0, 16)}...`);
+            }
+        } else {
+            console.log(`❌ 写入失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('写入文件失败:', error.message);
+    }
+}
+
+async function handleListDirectory(sessionIdPrefix, dirPath = '.') {
+    console.log(`\n📁 列出目录: ${dirPath}...`);
+    
+    try {
+        const result = await sessionListDirectory(sessionIdPrefix, dirPath);
+        
+        if (result.success) {
+            console.log(`\n=== ${dirPath} ===\n`);
+            
+            if (!result.entries || result.entries.length === 0) {
+                console.log('(空目录)');
+                return;
+            }
+            
+            // 排序：目录在前，文件在后
+            const sorted = [...result.entries].sort((a, b) => {
+                if (a.type === 'directory' && b.type !== 'directory') return -1;
+                if (a.type !== 'directory' && b.type === 'directory') return 1;
+                return a.name.localeCompare(b.name);
+            });
+            
+            for (const entry of sorted) {
+                const icon = entry.type === 'directory' ? '📁' : '📄';
+                const size = entry.size ? ` (${formatSize(entry.size)})` : '';
+                console.log(`${icon} ${entry.name}${size}`);
+            }
+            
+            console.log(`\n共 ${result.entries.length} 项`);
+        } else {
+            console.log(`❌ 列出目录失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('列出目录失败:', error.message);
+    }
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+async function handleDirectoryTree(sessionIdPrefix, dirPath = '.', maxDepth = 3) {
+    console.log(`\n🌳 目录树: ${dirPath} (深度: ${maxDepth})...`);
+    
+    try {
+        const result = await sessionGetDirectoryTree(sessionIdPrefix, dirPath, maxDepth);
+        
+        if (result.success && result.tree) {
+            console.log(`\n=== ${dirPath} ===\n`);
+            printTree(result.tree, '');
+        } else {
+            console.log(`❌ 获取目录树失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('获取目录树失败:', error.message);
+    }
+}
+
+function printTree(node, prefix, isLast = true) {
+    const connector = isLast ? '└── ' : '├── ';
+    const icon = node.type === 'directory' ? '📁' : '📄';
+    console.log(`${prefix}${connector}${icon} ${node.name}`);
+    
+    if (node.children && node.children.length > 0) {
+        const newPrefix = prefix + (isLast ? '    ' : '│   ');
+        for (let i = 0; i < node.children.length; i++) {
+            printTree(node.children[i], newPrefix, i === node.children.length - 1);
+        }
+    }
+}
+
+async function handleRipgrep(sessionIdPrefix, pattern, cwd = '.') {
+    console.log(`\n🔍 搜索: ${pattern} in ${cwd}...`);
+    
+    try {
+        const result = await sessionRipgrep(sessionIdPrefix, pattern, cwd);
+        
+        if (result.success) {
+            if (result.stdout) {
+                console.log('\n--- 搜索结果 ---');
+                console.log(result.stdout);
+                console.log('--- 结束 ---');
+            } else {
+                console.log('(无匹配结果)');
+            }
+        } else {
+            console.log(`❌ 搜索失败: ${result.error || result.stderr}`);
+        }
+    } catch (error) {
+        console.error('搜索失败:', error.message);
+    }
+}
+
+async function handleSessionBash(sessionIdPrefix, command) {
+    console.log(`\n💻 执行命令: ${command}...`);
+    
+    try {
+        const result = await sessionBash(sessionIdPrefix, command);
+        
+        if (result.success) {
+            if (result.stdout) {
+                console.log('\n--- 输出 ---');
+                console.log(result.stdout);
+            }
+            if (result.stderr) {
+                console.log('\n--- 错误 ---');
+                console.log(result.stderr);
+            }
+            console.log(`\n退出码: ${result.exitCode}`);
+        } else {
+            console.log(`❌ 执行失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('执行命令失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - 机器管理扩展
+// ============================================================================
+
+async function handleStopDaemon(machineIdPrefix) {
+    console.log(`\n🛑 停止 Daemon...`);
+    
+    try {
+        const result = await stopMachineDaemon(machineIdPrefix);
+        console.log(`✅ ${result.message || 'Daemon 已停止'}`);
+    } catch (error) {
+        console.error('停止 Daemon 失败:', error.message);
+    }
+}
+
+async function handleMachineBash(machineIdPrefix, command) {
+    console.log(`\n💻 在机器上执行: ${command}...`);
+    
+    try {
+        const result = await executeMachineBash(machineIdPrefix, command);
+        
+        if (result.success) {
+            if (result.stdout) {
+                console.log('\n--- 输出 ---');
+                console.log(result.stdout);
+            }
+            if (result.stderr) {
+                console.log('\n--- 错误 ---');
+                console.log(result.stderr);
+            }
+            console.log(`\n退出码: ${result.exitCode}`);
+        } else {
+            console.log(`❌ 执行失败: ${result.error || result.stderr}`);
+        }
+    } catch (error) {
+        console.error('执行命令失败:', error.message);
+    }
+}
+
+// ============================================================================
+// 显示函数 - Todo 任务
+// ============================================================================
+
+async function displayTodos() {
+    console.log('\n📝 获取任务列表...');
+    
+    try {
+        const state = await fetchTodos();
+        
+        console.log('\n=== 任务列表 ===\n');
+        
+        const undone = state.undoneOrder.map(id => state.todos[id]).filter(Boolean);
+        const done = state.doneOrder.map(id => state.todos[id]).filter(Boolean);
+        
+        if (undone.length === 0 && done.length === 0) {
+            console.log('(暂无任务)');
+            console.log('\n使用 todo add <标题> 添加任务');
+            return;
+        }
+        
+        if (undone.length > 0) {
+            console.log('--- 待完成 ---');
+            for (let i = 0; i < undone.length; i++) {
+                const todo = undone[i];
+                const linkedCount = Object.keys(todo.linkedSessions || {}).length;
+                const linkedInfo = linkedCount > 0 ? ` [${linkedCount} 会话]` : '';
+                console.log(`[${i + 1}] ☐ ${todo.title}${linkedInfo}`);
+                console.log(`    ID: ${todo.id.substring(0, 8)}...`);
+            }
+            console.log('');
+        }
+        
+        if (done.length > 0) {
+            console.log('--- 已完成 ---');
+            for (const todo of done.slice(0, 5)) {
+                const completedDate = todo.completedAt 
+                    ? new Date(todo.completedAt).toLocaleDateString()
+                    : '';
+                console.log(`☑ ${todo.title} ${completedDate ? `(${completedDate})` : ''}`);
+                console.log(`  ID: ${todo.id.substring(0, 8)}...`);
+            }
+            if (done.length > 5) {
+                console.log(`  ... 还有 ${done.length - 5} 项已完成任务`);
+            }
+            console.log('');
+        }
+        
+        console.log(`共 ${undone.length} 项待完成，${done.length} 项已完成`);
+    } catch (error) {
+        console.error('获取任务失败:', error.message);
+    }
+}
+
+async function handleAddTodo(title) {
+    console.log(`\n📝 添加任务: ${title}...`);
+    
+    try {
+        const id = await addTodo(title);
+        console.log(`✅ 任务已添加 (ID: ${id.substring(0, 8)}...)`);
+    } catch (error) {
+        console.error('添加任务失败:', error.message);
+    }
+}
+
+async function handleToggleTodo(idPrefix) {
+    console.log(`\n📝 切换任务状态...`);
+    
+    try {
+        if (!cachedTodoState) {
+            await fetchTodos();
+        }
+        
+        // 支持短 ID 匹配
+        const fullId = Object.keys(cachedTodoState.todos).find(id => id.startsWith(idPrefix));
+        if (!fullId) {
+            console.log('❌ 任务不存在');
+            return;
+        }
+        
+        const isDone = await toggleTodo(fullId);
+        console.log(`✅ 任务已${isDone ? '完成' : '取消完成'}`);
+    } catch (error) {
+        console.error('切换任务状态失败:', error.message);
+    }
+}
+
+async function handleEditTodo(idPrefix, title) {
+    console.log(`\n📝 编辑任务...`);
+    
+    try {
+        if (!cachedTodoState) {
+            await fetchTodos();
+        }
+        
+        const fullId = Object.keys(cachedTodoState.todos).find(id => id.startsWith(idPrefix));
+        if (!fullId) {
+            console.log('❌ 任务不存在');
+            return;
+        }
+        
+        await editTodoTitle(fullId, title);
+        console.log('✅ 任务已更新');
+    } catch (error) {
+        console.error('编辑任务失败:', error.message);
+    }
+}
+
+async function handleDeleteTodo(idPrefix) {
+    console.log(`\n📝 删除任务...`);
+    
+    try {
+        if (!cachedTodoState) {
+            await fetchTodos();
+        }
+        
+        const fullId = Object.keys(cachedTodoState.todos).find(id => id.startsWith(idPrefix));
+        if (!fullId) {
+            console.log('❌ 任务不存在');
+            return;
+        }
+        
+        await deleteTodo(fullId);
+        console.log('✅ 任务已删除');
+    } catch (error) {
+        console.error('删除任务失败:', error.message);
+    }
+}
+
+async function displayTodoSessions(idPrefix) {
+    console.log(`\n📝 获取任务关联会话...`);
+    
+    try {
+        if (!cachedTodoState) {
+            await fetchTodos();
+        }
+        
+        const fullId = Object.keys(cachedTodoState.todos).find(id => id.startsWith(idPrefix));
+        if (!fullId) {
+            console.log('❌ 任务不存在');
+            return;
+        }
+        
+        const todo = cachedTodoState.todos[fullId];
+        const linkedSessions = todo.linkedSessions || {};
+        
+        console.log(`\n=== 任务: ${todo.title} ===\n`);
+        
+        if (Object.keys(linkedSessions).length === 0) {
+            console.log('(暂无关联会话)');
+            return;
+        }
+        
+        console.log('关联的会话:');
+        for (const [sessionId, data] of Object.entries(linkedSessions)) {
+            const linkedDate = new Date(data.linkedAt).toLocaleString();
+            console.log(`  📎 ${data.title}`);
+            console.log(`     会话: ${sessionId.substring(0, 8)}...`);
+            console.log(`     关联于: ${linkedDate}`);
+        }
+    } catch (error) {
+        console.error('获取任务会话失败:', error.message);
+    }
+}
+
+// ============================================================================
 // 诊断会话状态
 // ============================================================================
 
@@ -2386,12 +3343,35 @@ function showHelp() {
   chat                   进入对话模式
   diagnose <id>          诊断会话状态
 
+远程启动:
+  spawn <机器> <目录>    远程启动新会话
+    --agent=TYPE         指定 agent 类型 (claude/codex/gemini)
+    --approve-create     批准创建新目录
+
+文件操作:
+  cat <id> <path>        读取远程文件
+  write <id> <path> <内容> 写入远程文件
+  ls <id> [path]         列出目录内容
+  tree <id> [path] [深度] 显示目录树
+  rg <id> <pattern> [path] 搜索文件内容
+  bash <id> <command>    执行 bash 命令
+
+任务管理:
+  todo                   查看任务列表
+  todo add <标题>        添加新任务
+  todo done <id>         标记完成/取消完成
+  todo edit <id> <标题>  编辑任务标题
+  todo delete <id>       删除任务
+  todo sessions <id>     查看任务关联会话
+
 账户管理:
   profile                查看账户资料
   settings               查看账户设置
 
 设备管理:
   machines               查看机器列表
+  machine stop <id>      停止机器 Daemon
+  machine bash <id> <cmd> 在机器上执行命令
 
 使用统计:
   usage [period]         查看使用量 (today/7days/30days)
@@ -2422,6 +3402,7 @@ KV 存储:
   quit, exit, q          退出程序
 
 可用权限模式: ${VALID_MODES.join(', ')}
+可用 Agent 类型: ${VALID_AGENTS.join(', ')}
 `);
 }
 
@@ -2500,6 +3481,67 @@ async function processCommand(input, rl) {
             }
             break;
         
+        // 文件操作
+        case 'cat':
+        case 'read':
+            if (args.length >= 2) {
+                await handleReadFile(args[0], args[1]);
+            } else {
+                console.log('用法: cat <session-id> <file-path>');
+            }
+            break;
+        
+        case 'write':
+            if (args.length >= 3) {
+                await handleWriteFile(args[0], args[1], args.slice(2).join(' '));
+            } else {
+                console.log('用法: write <session-id> <file-path> <content>');
+            }
+            break;
+        
+        case 'ls':
+        case 'dir':
+            if (args.length >= 1) {
+                const sessionId = args[0];
+                const dirPath = args[1] || '.';
+                await handleListDirectory(sessionId, dirPath);
+            } else {
+                console.log('用法: ls <session-id> [path]');
+            }
+            break;
+        
+        case 'tree':
+            if (args.length >= 1) {
+                const sessionId = args[0];
+                const dirPath = args[1] || '.';
+                const depth = parseInt(args[2]) || 3;
+                await handleDirectoryTree(sessionId, dirPath, depth);
+            } else {
+                console.log('用法: tree <session-id> [path] [depth]');
+            }
+            break;
+        
+        case 'rg':
+        case 'grep':
+            if (args.length >= 2) {
+                const sessionId = args[0];
+                const pattern = args[1];
+                const cwd = args[2] || '.';
+                await handleRipgrep(sessionId, pattern, cwd);
+            } else {
+                console.log('用法: rg <session-id> <pattern> [path]');
+            }
+            break;
+        
+        case 'bash':
+        case 'exec':
+            if (args.length >= 2) {
+                await handleSessionBash(args[0], args.slice(1).join(' '));
+            } else {
+                console.log('用法: bash <session-id> <command>');
+            }
+            break;
+        
         // 账户管理
         case 'profile':
             await displayProfile();
@@ -2512,6 +3554,47 @@ async function processCommand(input, rl) {
         // 设备管理
         case 'machines':
             await displayMachines();
+            break;
+        
+        case 'machine':
+            if (args[0] === 'stop' && args[1]) {
+                await handleStopDaemon(args[1]);
+            } else if (args[0] === 'bash' && args.length >= 3) {
+                await handleMachineBash(args[1], args.slice(2).join(' '));
+            } else {
+                console.log('用法:');
+                console.log('  machine stop <id>           停止机器 Daemon');
+                console.log('  machine bash <id> <command> 在机器上执行命令');
+            }
+            break;
+        
+        // 远程启动会话
+        case 'spawn':
+            if (args.length >= 2) {
+                const machineId = args[0];
+                const directory = args[1];
+                const options = {};
+                
+                // 解析选项
+                for (let i = 2; i < args.length; i++) {
+                    if (args[i].startsWith('--agent=')) {
+                        options.agent = args[i].split('=')[1];
+                    } else if (args[i] === '--approve-create' || args[i] === '--approve') {
+                        options.approveCreate = true;
+                    }
+                }
+                
+                // 验证 agent
+                if (options.agent && !VALID_AGENTS.includes(options.agent)) {
+                    console.log(`❌ 无效的 agent: ${options.agent}`);
+                    console.log(`有效 agent: ${VALID_AGENTS.join(', ')}`);
+                    break;
+                }
+                
+                await handleSpawnSession(machineId, directory, options);
+            } else {
+                console.log('用法: spawn <machine-id> <directory> [--agent=claude|codex|gemini] [--approve-create]');
+            }
             break;
         
         // 使用统计
@@ -2542,6 +3625,32 @@ async function processCommand(input, rl) {
                 await kvDelete(args[1]);
             } else {
                 await displayKvList(args[0] || '');
+            }
+            break;
+        
+        // Todo 任务管理
+        case 'todo':
+        case 'todos':
+            if (args[0] === 'add' && args.length >= 2) {
+                await handleAddTodo(args.slice(1).join(' '));
+            } else if ((args[0] === 'done' || args[0] === 'toggle') && args[1]) {
+                await handleToggleTodo(args[1]);
+            } else if (args[0] === 'edit' && args.length >= 3) {
+                await handleEditTodo(args[1], args.slice(2).join(' '));
+            } else if ((args[0] === 'delete' || args[0] === 'del' || args[0] === 'rm') && args[1]) {
+                await handleDeleteTodo(args[1]);
+            } else if (args[0] === 'sessions' && args[1]) {
+                await displayTodoSessions(args[1]);
+            } else if (args[0] === 'list' || !args[0]) {
+                await displayTodos();
+            } else {
+                console.log('用法:');
+                console.log('  todo                  显示任务列表');
+                console.log('  todo add <标题>       添加新任务');
+                console.log('  todo done <id>        标记完成/取消完成');
+                console.log('  todo edit <id> <标题> 编辑任务标题');
+                console.log('  todo delete <id>      删除任务');
+                console.log('  todo sessions <id>    查看任务关联会话');
             }
             break;
         
@@ -2636,7 +3745,7 @@ async function processCommand(input, rl) {
 // ============================================================================
 
 async function main() {
-    console.log('\n🚀 Happy Coder 客户端 v2.1.0');
+    console.log('\n🚀 Happy Coder 客户端 v3.0.0');
     console.log(`📡 服务器: ${SERVER_URL}`);
     console.log(`🔑 API Key: ${API_KEY ? '✓ 已配置' : '✗ 未配置'}`);
     console.log(`🔐 权限模式: ${currentPermissionMode}`);
