@@ -11,6 +11,7 @@ const SessionManager = require('./core/SessionManager');
 const ConversationManager = require('./conversation/ConversationManager');
 const ModeUtils = require('./utils/ModeUtils');
 const { DaemonClient, createDaemonClient } = require('./daemon');
+const { TodoManager, TODO_PREFIX, TODO_INDEX_KEY } = require('./todo');
 
 // 导出主要类
 module.exports = {
@@ -20,6 +21,11 @@ module.exports = {
   // Daemon 客户端
   DaemonClient,
   createDaemonClient,
+  
+  // Todo 管理器
+  TodoManager,
+  TODO_PREFIX,
+  TODO_INDEX_KEY,
   
   // 核心组件（高级用法）
   Encryption,

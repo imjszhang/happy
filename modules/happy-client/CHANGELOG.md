@@ -9,6 +9,48 @@
 
 ---
 
+## [3.0.0] - 2026-01-09
+
+### 新增
+- ✨ **Todo 任务管理** - 完整的任务增删改查功能
+  - `getTodos()` - 获取所有任务列表
+  - `addTodo(title)` - 添加新任务
+  - `toggleTodo(id)` - 切换任务完成状态
+  - `editTodo(id, title)` - 编辑任务标题
+  - `deleteTodo(id)` - 删除任务
+  - 支持任务 ID 前缀匹配
+  - 新增事件：`todo:added`, `todo:toggled`, `todo:edited`, `todo:deleted`
+- ✨ **Machine RPC 基础设施** - 支持远程机器控制
+  - `machineRPC(machineId, method, params)` - 通用机器 RPC 调用
+  - `spawnRemoteSession(machineId, directory, options)` - 远程启动会话，支持多 Agent 类型（claude/codex/gemini）
+  - `stopMachineDaemon(machineId)` - 停止远程机器 Daemon
+  - `executeMachineCommand(machineId, command, cwd)` - 在远程机器执行命令
+  - 新增事件：`machine:sessionSpawned`, `machine:daemonStopped`
+- ✨ **Session 文件操作 RPC** - 远程文件系统操作
+  - `readRemoteFile(sessionId, filePath)` - 读取远程文件
+  - `writeRemoteFile(sessionId, filePath, content, expectedHash)` - 写入远程文件
+  - `listRemoteDirectory(sessionId, dirPath)` - 列出目录内容
+  - `getRemoteDirectoryTree(sessionId, dirPath, maxDepth)` - 获取目录树结构
+  - `searchRemoteFiles(sessionId, pattern, cwd)` - 使用 ripgrep 搜索文件
+  - `executeRemoteCommand(sessionId, command, cwd)` - 执行 bash 命令
+
+### 新增模块
+- ✨ **todo/TodoManager.js** - Todo 任务管理器
+  - 使用 KV 存储，SecretBox 加密
+  - 支持任务索引和排序
+  - 维护已完成和未完成任务列表
+
+### 技术细节
+- WebSocketClient.js 新增 `machineRPC` 方法
+- HappyClient.js 新增 TodoManager 初始化和便捷方法
+- 新建 todo 目录，包含 TodoManager.js 和 index.js
+
+### 兼容性
+- ✅ 向后兼容：所有新功能为增量添加
+- ✅ 与 happy-mini-client.js v3.0.0 功能对齐
+
+---
+
 ## [2.2.0] - 2026-01-04
 
 ### 新增
@@ -143,4 +185,4 @@
 
 ---
 
-*最后更新: 2026-01-04*
+*最后更新: 2026-01-09*

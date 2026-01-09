@@ -179,6 +179,47 @@ class WebSocketClient extends EventEmitter {
     // 抛出错误，包含错误信息（如果有）
     throw new Error(result.error || 'RPC 调用失败');
   }
+  
+  /**
+   * 发送 Machine RPC 调用
+   * @param {string} machineId - 机器 ID
+   * @param {string} method - RPC 方法名（如 'spawn-happy-session', 'stop-daemon', 'bash'）
+   * @param {object} params - 参数对象
+   * @param {object} enc - 机器加密器
+   * @param {object} encryption - 加密管理器
+   * @returns {Promise<object>} 解密后的 RPC 结果
+   */
+  async machineRPC(machineId, method, params, enc, encryption) {
+    if (!this.socket) {
+      throw new Error('WebSocket 未连接');
+    }
+    
+    // 加密参数
+    const encrypted = encryption.encrypt(enc, params);
+    const encryptedBase64 = CryptoUtils.encodeBase64(encrypted, 'base64');
+    
+    // 发送 RPC 调用并等待响应
+    const result = await this.socket.emitWithAck('rpc-call', {
+      method: `${machineId}:${method}`,
+      params: encryptedBase64
+    });
+    
+    // 处理响应
+    if (result.ok) {
+      if (result.result) {
+        // 解密返回结果
+        const decrypted = encryption.decrypt(
+          enc, 
+          CryptoUtils.decodeBase64(result.result, 'base64')
+        );
+        return decrypted;
+      }
+      return {};
+    }
+    
+    // 抛出错误，包含错误信息（如果有）
+    throw new Error(result.error || 'Machine RPC 调用失败');
+  }
 }
 
 module.exports = WebSocketClient;

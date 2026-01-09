@@ -13,6 +13,7 @@
  * - 社交功能
  * - Feed 动态
  * - 服务连接
+ * - Todo 任务管理
  */
 const EventEmitter = require('events');
 const Encryption = require('./core/Encryption');
@@ -35,6 +36,7 @@ const {
   BACKEND_TYPES
 } = require('./utils/ModeUtils');
 const DaemonClient = require('./daemon/DaemonClient');
+const TodoManager = require('./todo/TodoManager');
 
 class HappyClient extends EventEmitter {
   constructor(options = {}) {
@@ -90,6 +92,9 @@ class HappyClient extends EventEmitter {
         httpTimeout: this.options.daemonTimeout
       });
     }
+    
+    // Todo 管理器（延迟初始化，需要 encryption）
+    this.todoManager = null;
     
     // 状态
     this.isConnected = false;
@@ -171,6 +176,13 @@ class HappyClient extends EventEmitter {
     const masterSecret = Buffer.from(secretBytes, 'base64url');
     
     this.encryption = await Encryption.create(masterSecret);
+    
+    // 初始化 Todo 管理器
+    this.todoManager = new TodoManager({
+      httpApi: this.httpApi,
+      encryption: this.encryption,
+      getToken: () => this._getToken()
+    });
   }
   
   /**
@@ -1169,6 +1181,301 @@ class HappyClient extends EventEmitter {
     }
     
     return result;
+  }
+  
+  // ============================================================================
+  // Machine RPC 调用
+  // ============================================================================
+  
+  /**
+   * 发送 Machine RPC 调用
+   * @param {string} machineId - 机器 ID
+   * @param {string} method - RPC 方法名（如 'spawn-happy-session', 'stop-daemon', 'bash'）
+   * @param {object} params - 参数对象
+   * @returns {Promise<object>} RPC 结果
+   */
+  async machineRPC(machineId, method, params = {}) {
+    if (!this.isConnected || !this.wsClient) {
+      throw new Error('客户端未连接，请先调用 initialize()');
+    }
+    
+    if (!machineId) {
+      throw new Error('未指定机器 ID');
+    }
+    
+    const enc = this.encryption.getMachineEncryption(machineId);
+    if (!enc) {
+      throw new Error('机器加密未初始化，请先调用 getMachines()');
+    }
+    
+    return await this.wsClient.machineRPC(machineId, method, params, enc, this.encryption);
+  }
+  
+  /**
+   * 在远程机器上启动新会话
+   * @param {string} machineId - 机器 ID
+   * @param {string} directory - 工作目录
+   * @param {object} options - 选项
+   * @param {string} options.agent - Agent 类型 ('claude' | 'codex' | 'gemini')，默认 'claude'
+   * @param {boolean} options.approveCreate - 是否批准创建新目录，默认 false
+   * @returns {Promise<object>} 启动结果
+   */
+  async spawnRemoteSession(machineId, directory, options = {}) {
+    const { agent = 'claude', approveCreate = false } = options;
+    
+    // 确保机器列表已加载（初始化机器加密）
+    const machines = await this.getMachines();
+    const machine = machines.find(m => m.id === machineId || m.id.startsWith(machineId));
+    
+    if (!machine) {
+      throw new Error(`机器不存在: ${machineId}`);
+    }
+    
+    if (!machine.active) {
+      throw new Error('机器离线，无法启动会话');
+    }
+    
+    const result = await this.machineRPC(machine.id, 'spawn-happy-session', {
+      type: 'spawn-in-directory',
+      directory,
+      approvedNewDirectoryCreation: approveCreate,
+      agent
+    });
+    
+    if (result.type === 'success') {
+      this.emit('machine:sessionSpawned', { 
+        machineId: machine.id, 
+        sessionId: result.sessionId, 
+        directory 
+      });
+    }
+    
+    return result;
+  }
+  
+  /**
+   * 停止远程机器上的 Daemon
+   * @param {string} machineId - 机器 ID
+   * @returns {Promise<object>} 操作结果
+   */
+  async stopMachineDaemon(machineId) {
+    // 确保机器列表已加载
+    const machines = await this.getMachines();
+    const machine = machines.find(m => m.id === machineId || m.id.startsWith(machineId));
+    
+    if (!machine) {
+      throw new Error(`机器不存在: ${machineId}`);
+    }
+    
+    const result = await this.machineRPC(machine.id, 'stop-daemon', {});
+    
+    this.emit('machine:daemonStopped', { machineId: machine.id });
+    return result;
+  }
+  
+  /**
+   * 在远程机器上执行命令
+   * @param {string} machineId - 机器 ID
+   * @param {string} command - 要执行的命令
+   * @param {string} cwd - 工作目录，默认 '~'
+   * @returns {Promise<object>} 执行结果
+   */
+  async executeMachineCommand(machineId, command, cwd = '~') {
+    // 确保机器列表已加载
+    const machines = await this.getMachines();
+    const machine = machines.find(m => m.id === machineId || m.id.startsWith(machineId));
+    
+    if (!machine) {
+      throw new Error(`机器不存在: ${machineId}`);
+    }
+    
+    return await this.machineRPC(machine.id, 'bash', { command, cwd });
+  }
+  
+  // ============================================================================
+  // Session 文件操作 RPC
+  // ============================================================================
+  
+  /**
+   * 读取远程文件
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} filePath - 文件路径
+   * @returns {Promise<object>} 文件内容
+   */
+  async readRemoteFile(sessionId, filePath) {
+    const targetSessionId = sessionId || this.currentSessionId;
+    return await this.sessionRPC(targetSessionId, 'readFile', { path: filePath });
+  }
+  
+  /**
+   * 写入远程文件
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} filePath - 文件路径
+   * @param {string} content - 文件内容
+   * @param {string} expectedHash - 预期哈希值（可选，用于冲突检测）
+   * @returns {Promise<object>} 操作结果
+   */
+  async writeRemoteFile(sessionId, filePath, content, expectedHash = null) {
+    const targetSessionId = sessionId || this.currentSessionId;
+    
+    // 将内容编码为 base64
+    const contentBase64 = Buffer.from(content, 'utf8').toString('base64');
+    
+    return await this.sessionRPC(targetSessionId, 'writeFile', {
+      path: filePath,
+      content: contentBase64,
+      expectedHash
+    });
+  }
+  
+  /**
+   * 列出远程目录内容
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} dirPath - 目录路径
+   * @returns {Promise<object>} 目录内容
+   */
+  async listRemoteDirectory(sessionId, dirPath) {
+    const targetSessionId = sessionId || this.currentSessionId;
+    return await this.sessionRPC(targetSessionId, 'listDirectory', { path: dirPath });
+  }
+  
+  /**
+   * 获取远程目录树结构
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} dirPath - 目录路径
+   * @param {number} maxDepth - 最大深度，默认 3
+   * @returns {Promise<object>} 目录树结构
+   */
+  async getRemoteDirectoryTree(sessionId, dirPath, maxDepth = 3) {
+    const targetSessionId = sessionId || this.currentSessionId;
+    return await this.sessionRPC(targetSessionId, 'getDirectoryTree', { 
+      path: dirPath, 
+      maxDepth 
+    });
+  }
+  
+  /**
+   * 在远程会话中搜索文件内容（使用 ripgrep）
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} pattern - 搜索模式
+   * @param {string} cwd - 搜索目录，默认 '.'
+   * @returns {Promise<object>} 搜索结果
+   */
+  async searchRemoteFiles(sessionId, pattern, cwd = '.') {
+    const targetSessionId = sessionId || this.currentSessionId;
+    return await this.sessionRPC(targetSessionId, 'ripgrep', { 
+      args: [pattern], 
+      cwd 
+    });
+  }
+  
+  /**
+   * 在远程会话中执行 bash 命令
+   * @param {string} sessionId - 会话 ID（可选，默认使用当前会话）
+   * @param {string} command - 要执行的命令
+   * @param {string} cwd - 工作目录，默认 '.'
+   * @returns {Promise<object>} 执行结果
+   */
+  async executeRemoteCommand(sessionId, command, cwd = '.') {
+    const targetSessionId = sessionId || this.currentSessionId;
+    return await this.sessionRPC(targetSessionId, 'bash', { command, cwd });
+  }
+  
+  // ============================================================================
+  // Todo 任务管理
+  // ============================================================================
+  
+  /**
+   * 获取所有 Todo 任务
+   * @returns {Promise<object>} Todo 状态对象 { todos, undoneOrder, doneOrder }
+   */
+  async getTodos() {
+    if (!this.todoManager) {
+      throw new Error('Todo 管理器未初始化，请先调用 initialize()');
+    }
+    return await this.todoManager.fetchTodos();
+  }
+  
+  /**
+   * 添加新任务
+   * @param {string} title - 任务标题
+   * @returns {Promise<string>} 新任务 ID
+   */
+  async addTodo(title) {
+    if (!this.todoManager) {
+      throw new Error('Todo 管理器未初始化，请先调用 initialize()');
+    }
+    const id = await this.todoManager.addTodo(title);
+    this.emit('todo:added', { id, title });
+    return id;
+  }
+  
+  /**
+   * 切换任务完成状态
+   * @param {string} id - 任务 ID（支持前缀匹配）
+   * @returns {Promise<boolean>} 新的完成状态
+   */
+  async toggleTodo(id) {
+    if (!this.todoManager) {
+      throw new Error('Todo 管理器未初始化，请先调用 initialize()');
+    }
+    
+    // 支持前缀匹配
+    const state = this.todoManager.getCachedState() || await this.todoManager.fetchTodos();
+    const fullId = Object.keys(state.todos).find(tid => tid === id || tid.startsWith(id));
+    
+    if (!fullId) {
+      throw new Error(`任务不存在: ${id}`);
+    }
+    
+    const done = await this.todoManager.toggleTodo(fullId);
+    this.emit('todo:toggled', { id: fullId, done });
+    return done;
+  }
+  
+  /**
+   * 编辑任务标题
+   * @param {string} id - 任务 ID（支持前缀匹配）
+   * @param {string} title - 新标题
+   * @returns {Promise<void>}
+   */
+  async editTodo(id, title) {
+    if (!this.todoManager) {
+      throw new Error('Todo 管理器未初始化，请先调用 initialize()');
+    }
+    
+    // 支持前缀匹配
+    const state = this.todoManager.getCachedState() || await this.todoManager.fetchTodos();
+    const fullId = Object.keys(state.todos).find(tid => tid === id || tid.startsWith(id));
+    
+    if (!fullId) {
+      throw new Error(`任务不存在: ${id}`);
+    }
+    
+    await this.todoManager.editTodoTitle(fullId, title);
+    this.emit('todo:edited', { id: fullId, title });
+  }
+  
+  /**
+   * 删除任务
+   * @param {string} id - 任务 ID（支持前缀匹配）
+   * @returns {Promise<void>}
+   */
+  async deleteTodo(id) {
+    if (!this.todoManager) {
+      throw new Error('Todo 管理器未初始化，请先调用 initialize()');
+    }
+    
+    // 支持前缀匹配
+    const state = this.todoManager.getCachedState() || await this.todoManager.fetchTodos();
+    const fullId = Object.keys(state.todos).find(tid => tid === id || tid.startsWith(id));
+    
+    if (!fullId) {
+      throw new Error(`任务不存在: ${id}`);
+    }
+    
+    await this.todoManager.deleteTodo(fullId);
+    this.emit('todo:deleted', { id: fullId });
   }
   
   // ============================================================================
